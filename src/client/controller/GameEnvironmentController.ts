@@ -2,7 +2,6 @@ import { RunService, Workspace } from "@rbxts/services";
 import { LocalPlayerController } from "client/controller/LocalPlayerController";
 import { LocalPlayer } from "engine/client/LocalPlayer";
 import { HostedService } from "engine/shared/di/HostedService";
-import { GameEnvironment } from "shared/data/GameEnvironment";
 import { Physics } from "shared/Physics";
 import type { PlayModeController } from "client/modes/PlayModeController";
 import type { PlayerDataStorage } from "client/PlayerDataStorage";
@@ -13,7 +12,9 @@ export class GameEnvironmentController extends HostedService {
 	constructor(@inject playerData: PlayerDataStorage, @inject plot: SharedPlot, @inject mode: PlayModeController) {
 		super();
 
-		this.event.subscribe(RunService.Heartbeat, (dt) => {
+		let roots: BasePart[] = [];
+		let nextRefresh = 0;
+		this.event.subscribe(RunService.PreSimulation, (dt) => {
 			const playerHeight = LocalPlayerController.getPlayerRelativeHeight();
 			const gravity = Physics.GetGravityOnHeight(playerHeight);
 
@@ -25,49 +26,31 @@ export class GameEnvironmentController extends HostedService {
 				wind = wind.apply((c) => math.clamp(c, -10000, 10000));
 				const max = wind.div(10);
 				Workspace.GlobalWind = max;
+				if (!playerData.config.get().physics.simplified_aerodynamics) return;
 
-				const apply = (part: BasePart, wind: Vector3) => {
-					let delta = wind.sub(part.AssemblyLinearVelocity);
-					delta = new Vector3(delta.X, 0, delta.Z) //
-						.apply(math.abs)
-						.Min(max)
-						.mul(delta.apply(math.sign))
-						.mul(wind.apply(math.sign));
-
-					delta = new Vector3(
-						math.sign(delta.X) === math.sign(wind.X) ? delta.X : 0,
-						0,
-						math.sign(delta.Z) === math.sign(wind.Z) ? delta.Z : 0,
+				if (os.clock() >= nextRefresh) {
+					nextRefresh = os.clock() + 0.5;
+					const unique = new Set<BasePart>();
+					for (const block of plot.getBlocks())
+						for (const part of block.GetDescendants()) {
+							if (part.IsA("BasePart") && part.AssemblyRootPart && !part.AssemblyRootPart.Anchored)
+								unique.add(part.AssemblyRootPart);
+						}
+					roots = [...unique];
+				}
+				const apply = (part: BasePart) => {
+					if (!part.Parent || part.Anchored) return;
+					const delta = max.sub(part.AssemblyLinearVelocity);
+					const density = Physics.GetAirDensityModifierOnHeight(
+						Physics.LocalHeight.fromGlobal(part.Position.Y),
 					);
-
-					part.ApplyImpulse(delta);
+					const change = new Vector3(delta.X, 0, delta.Z).mul(1 - math.exp(-math.max(0, dt) * density * 0.1));
+					part.ApplyImpulse(change.mul(part.AssemblyMass));
 				};
-
-				const vel = new Vector3(
-					wind.X * (gravity / GameEnvironment.EarthGravity) * dt,
-					0,
-					wind.Z * (gravity / GameEnvironment.EarthGravity) * dt,
-				);
-
-				for (const block of plot.getBlocks()) {
-					for (const part of block.GetDescendants()) {
-						if (!part.IsA("BasePart")) continue;
-						apply(part, vel);
-					}
-				}
-
+				for (const root of roots) if (root.AssemblyRootPart === root) apply(root);
 				const playerPart = LocalPlayer.humanoid.get()?.RootPart;
-				if (playerPart) {
-					apply(
-						playerPart,
-						new Vector3(
-							wind.X * (gravity / GameEnvironment.EarthGravity) * dt,
-							0,
-							wind.Z * (gravity / GameEnvironment.EarthGravity) * dt,
-						),
-					);
-				}
-			}
+				if (playerPart && !roots.includes(playerPart.AssemblyRootPart ?? playerPart)) apply(playerPart);
+			} else Workspace.GlobalWind = Vector3.zero;
 		});
 	}
 }
