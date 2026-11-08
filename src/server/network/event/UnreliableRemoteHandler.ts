@@ -1,6 +1,7 @@
 import { Players, RunService, Workspace } from "@rbxts/services";
 import { HostedService } from "engine/shared/di/HostedService";
 import { ServerBlockLogic } from "server/blocks/ServerBlockLogic";
+import { CombatDamage } from "server/network/CombatDamage";
 import { CombatHistory } from "server/network/CombatHistory";
 import { ServerPartUtils } from "server/plots/ServerPartUtils";
 import { BlockManager } from "shared/building/BlockManager";
@@ -147,6 +148,14 @@ export class UnreliableRemoteController extends HostedService {
 			)
 				return;
 			if (validParts(player, [part]).size() === 0) return;
+			const source = BlockManager.tryGetBlockModelByPart(part);
+			if (
+				!source ||
+				!["tnt", "cylindricaltnt", "sphericaltnt", "halfsphericaltnt"].includes(
+					BlockManager.manager.id.get(source),
+				)
+			)
+				return;
 			let center = part.Position;
 			if (player && position !== undefined) {
 				if (!typeIs(position, "Vector3") || !typeIs(time, "number")) return;
@@ -167,7 +176,7 @@ export class UnreliableRemoteController extends HostedService {
 			detonated.add(part);
 			part.SetAttribute("ExplosionDetonated", true);
 			part.Destroying.Once(() => detonated.delete(part));
-			radius = math.clamp(radius, 0, 16);
+			radius = math.clamp(radius, 1, 12);
 			pressure = math.clamp(pressure, 0, 2500);
 
 			const hitSet = new Set(Workspace.GetPartBoundsInRadius(center, radius));
@@ -197,24 +206,35 @@ export class UnreliableRemoteController extends HostedService {
 				const flameHitParts = Workspace.GetPartBoundsInRadius(center, radius * 1.5);
 
 				flameHitParts.forEach((part) => {
-					if (math.random(1, 8) === 1) {
+					if (
+						BlockManager.isActiveBlockPart(part) &&
+						math.random() < 0.15 * CombatDamage.exposure(center, part, source)
+					) {
 						spreadingFire.burn(part);
 					}
 				});
 			}
 
 			const affected = new Set<BasePart>();
-			const broken: BasePart[] = [];
-			hitParts.forEach((part) => {
-				if (!BlockManager.isActiveBlockPart(part)) {
-					return;
-				}
-
-				if (math.random(1, 2) === 1) {
-					part.SetAttribute("LastDamageCause", "explosion");
-					broken.push(part);
-					ServerPartUtils.BreakJoints(part);
-				}
+			const damaged = new Set<Model>();
+			hitParts.forEach((hit) => {
+				const model = BlockManager.tryGetBlockModelByPart(hit) ?? hit.FindFirstAncestorOfClass("Model");
+				if (!model || model === source || damaged.has(model)) return;
+				damaged.add(model);
+				let distance = math.max(0, hit.Position.sub(center).Magnitude - hit.Size.Magnitude / 2);
+				const pose =
+					time !== undefined && model.PrimaryPart ? history.at(time)?.get(model.PrimaryPart) : undefined;
+				if (pose)
+					distance = math.min(
+						distance,
+						math.max(0, pose.frame.Position.sub(center).Magnitude - pose.size.Magnitude / 2),
+					);
+				const falloff = math.clamp(1 - distance / radius, 0, 1);
+				CombatDamage.apply(
+					hit,
+					180 * falloff * (pressure / 2500) * CombatDamage.exposure(center, hit, source),
+					"explosion",
+				);
 			});
 			hitParts.forEach((part) => {
 				if (!BlockManager.isActiveBlockPart(part)) return;
@@ -228,7 +248,10 @@ export class UnreliableRemoteController extends HostedService {
 					if (canOwn) root.SetNetworkOwner(undefined);
 					const falloff = math.clamp(1 - part.Position.sub(center).Magnitude / math.max(radius, 0.001), 0, 1);
 					const budget = impulseBudget.get(root) ?? { at: os.clock(), used: 0 };
-					const deltaSpeed = math.min((pressure * falloff) / 40, math.max(0, 62.5 - budget.used));
+					const deltaSpeed = math.min(
+						(pressure * falloff * CombatDamage.exposure(center, part, source)) / 40,
+						math.max(0, 62.5 - budget.used),
+					);
 					budget.used += deltaSpeed;
 					impulseBudget.set(root, budget);
 					root.ApplyImpulse(direction.mul(root.AssemblyMass * deltaSpeed));
@@ -246,8 +269,6 @@ export class UnreliableRemoteController extends HostedService {
 				}
 			});
 
-			if (broken.size() > 0)
-				CustomRemotes.physics.normalizeRootparts.send(Players.GetPlayers(), { parts: broken });
 			part.Transparency = 1;
 			PartUtils.applyToAllDescendantsOfType("Decal", part, (decal) => decal.Destroy());
 

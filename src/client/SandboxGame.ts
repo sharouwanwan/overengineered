@@ -18,6 +18,7 @@ import { RagdollController } from "client/controller/RagdollController";
 import { MusicController } from "client/controller/sound/MusicController";
 import { SoundController } from "client/controller/SoundController";
 import { UpdatePopupController } from "client/controller/UpdatePopupController";
+import { WeaponEffectsController } from "client/controller/WeaponEffectsController";
 import { AdminGui } from "client/gui/AdminGui";
 import { FpsCounterController } from "client/gui/FpsCounterController";
 import { GuiAutoScaleController } from "client/gui/GuiAutoScaleController";
@@ -133,7 +134,8 @@ export namespace SandboxGame {
 		builder.services.registerService(MusicController);
 		builder.services.registerService(GuiAutoScaleController);
 		builder.services.registerService(HideInterfaceController);
-		builder.services.registerService(WeaponModuleSystem); //weapons test
+		builder.services.registerService(WeaponModuleSystem);
+		builder.services.registerService(WeaponEffectsController);
 		builder.services.registerService(FpsCounterController);
 		builder.services.registerService(RainbowGuiController);
 		builder.services.registerService(BlurController);

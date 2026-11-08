@@ -4,6 +4,7 @@ import { BlocksSerializer } from "shared/building/BlocksSerializer";
 import { CustomRemotes } from "shared/Remotes";
 import { SlotsMeta } from "shared/SlotsMeta";
 import { spawnPositionsKeyed } from "shared/SpawnPositions";
+import { prepareWeaponMarkers } from "shared/weaponProjectiles/WeaponMarkers";
 import type { PlayerDatabase } from "server/database/PlayerDatabase";
 import type { SlotDatabase } from "server/database/SlotDatabase";
 import type { PlayModeBase } from "server/modes/PlayModeBase";
@@ -113,6 +114,8 @@ export class RideMode implements PlayModeBase {
 		}
 
 		for (const block of blocksChildren) {
+			if (this.blockList.blocks[BlockManager.manager.id.get(block)]?.weaponConfig)
+				prepareWeaponMarkers(block, false);
 			ServerPartUtils.switchDescendantsAnchor(block, false);
 			if (this.playerData.get(player.UserId).settings?.physics?.advanced_aerodynamics) {
 				ServerPartUtils.switchDescendantsAero(block, true);

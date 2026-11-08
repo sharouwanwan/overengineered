@@ -1,12 +1,30 @@
 import { RunService, Workspace } from "@rbxts/services";
 import { InstanceBlockLogic as InstanceBlockLogic } from "shared/blockLogic/BlockLogic";
+import { TNTFuse } from "shared/blockLogic/TNTFuse";
 import { BlockCreation } from "shared/blocks/BlockCreation";
+import { BlockManager } from "shared/building/BlockManager";
 import { RemoteEvents } from "shared/RemoteEvents";
 import type { BlockLogicFullBothDefinitions, InstanceBlockLogicArgs } from "shared/blockLogic/BlockLogic";
 import type { BlockBuildersWithoutIdAndDefaults, BlockLogicInfo } from "shared/blocks/Block";
 
 const definition = {
 	input: {
+		armed: { displayName: "Armed", types: { bool: { config: true } } },
+		armingDelay: {
+			displayName: "Arming Delay (seconds)",
+			types: { number: { config: 0, clamp: { showAsSlider: true, min: 0, max: 60 } } },
+		},
+		fuseTime: {
+			displayName: "Fuse Time (seconds)",
+			tooltip: "Delay after a trigger; disarming cancels the fuse.",
+			types: { number: { config: 0, clamp: { showAsSlider: true, min: 0, max: 60 } } },
+		},
+		proximity: {
+			displayName: "Proximity Radius",
+			tooltip:
+				"Zero disables proximity. Detects other builds and living characters, excluding scenery and your build.",
+			types: { number: { config: 0, clamp: { showAsSlider: true, min: 0, max: 24 } } },
+		},
 		explode: {
 			displayName: "Explode",
 			types: {
@@ -68,7 +86,11 @@ const definition = {
 			},
 		},
 	},
-	output: {},
+	output: {
+		armed: { displayName: "Armed", types: ["bool"] },
+		triggered: { displayName: "Fuse Triggered", types: ["bool"] },
+		remaining: { displayName: "Fuse Remaining", types: ["number"] },
+	},
 } satisfies BlockLogicFullBothDefinitions;
 
 type TNTBlock = BlockModel & {
@@ -81,6 +103,15 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 		super(definition, block);
 
 		const mainPart = this.instance.Part;
+		const fuse = new TNTFuse();
+		const armed = this.initializeInputCache("armed"),
+			armingDelay = this.initializeInputCache("armingDelay"),
+			fuseTime = this.initializeInputCache("fuseTime"),
+			proximity = this.initializeInputCache("proximity");
+		let ready = false;
+		const trigger = () => {
+			if (ready) fuse.trigger(os.clock(), fuseTime.tryGet() ?? 0);
+		};
 
 		const radius = this.initializeInputCache("radius");
 		const pressure = this.initializeInputCache("pressure");
@@ -111,7 +142,10 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 			retryAt = os.clock() + 0.1;
 		};
 		this.event.subscribe(mainPart.GetAttributeChangedSignal("ExplosionDetonated"), () => {
-			if (mainPart.GetAttribute("ExplosionDetonated") === true) this.disable();
+			if (mainPart.GetAttribute("ExplosionDetonated") === true) {
+				fuse.confirm();
+				this.disable();
+			}
 		});
 
 		let previousPosition = mainPart.Position;
@@ -119,7 +153,32 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 		sweep.FilterType = Enum.RaycastFilterType.Exclude;
 		sweep.FilterDescendantsInstances = [this.instance.Parent ?? this.instance];
 		sweep.RespectCanCollide = true;
+		let nextProximity = 0;
+		const proximityParams = new OverlapParams();
+		proximityParams.FilterDescendantsInstances = [this.instance.Parent ?? this.instance];
+		proximityParams.MaxParts = 128;
 		this.event.subscribe(RunService.Heartbeat, () => {
+			const now = os.clock();
+			ready = fuse.update(now, armed.tryGet() ?? false, armingDelay.tryGet() ?? 0);
+			if (!ready) {
+				resend = undefined;
+			}
+			const range = proximity.tryGet() ?? 0;
+			if (ready && range > 0 && now >= nextProximity) {
+				nextProximity = now + 0.1;
+				for (const part of Workspace.GetPartBoundsInRadius(mainPart.Position, range, proximityParams)) {
+					const model = part.FindFirstAncestorOfClass("Model"),
+						human = model?.FindFirstChildOfClass("Humanoid");
+					if (BlockManager.isActiveBlockPart(part) || (human && human.Health > 0)) {
+						trigger();
+						break;
+					}
+				}
+			}
+			this.output.armed.set("bool", ready);
+			this.output.triggered.set("bool", fuse.triggered());
+			this.output.remaining.set("number", fuse.remaining(now));
+			if (ready && fuse.due(now)) explodeTNT();
 			if (resend && os.clock() >= retryAt) {
 				resend();
 				if (--retries <= 0) resend = undefined;
@@ -139,14 +198,16 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 					travel,
 					sweep,
 				);
-				if (hit) explodeTNT(previousPosition.add(travel.Unit.mul(hit.Distance)));
+				if (hit && ready) {
+					trigger();
+					if (fuse.due(now)) explodeTNT(previousPosition.add(travel.Unit.mul(hit.Distance)));
+				}
 			}
 			previousPosition = position;
 		});
 
-		this.on(({ explode }) => {
-			if (!explode) return;
-			explodeTNT();
+		this.onAlwaysInputs(({ explode }) => {
+			if (explode) trigger();
 		});
 
 		this.event.subscribe(mainPart.Touched, (part) => {
@@ -156,7 +217,10 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 			const relativeSpeed = mainPart
 				.GetVelocityAtPosition(mainPart.Position)
 				.sub(part.GetVelocityAtPosition(mainPart.Position)).Magnitude;
-			if (relativeSpeed > 10) explodeTNT();
+			if (relativeSpeed > 10 && ready) {
+				trigger();
+				if (fuse.due(os.clock())) explodeTNT();
+			}
 		});
 	}
 }

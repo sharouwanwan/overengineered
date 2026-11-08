@@ -1,11 +1,13 @@
-import { Workspace } from "@rbxts/services";
+import { RunService, Workspace } from "@rbxts/services";
 import { HostedService } from "engine/shared/di/HostedService";
 import { BlockManager } from "shared/building/BlockManager";
+import { prepareWeaponMarkers } from "shared/weaponProjectiles/WeaponMarkers";
 import type { SharedPlots } from "shared/building/SharedPlots";
 import type { modifierValue, projectileModifier } from "shared/weaponProjectiles/BaseProjectileLogic";
 
 type weaponMarker = {
 	markerInstance: BasePart;
+	localFrame: CFrame;
 	occupiedWith: {
 		module: WeaponModule | undefined;
 		block: PlacedBlockData | Block | undefined;
@@ -37,7 +39,10 @@ export class WeaponModule {
 		this.block = blockList.blocks[placedBlock.id]!;
 		this.instance = placedBlock.instance;
 
-		const fm = (placedBlock.instance.WaitForChild("moduleMarkers")?.GetChildren() ?? []) as BasePart[];
+		if (RunService.IsServer()) prepareWeaponMarkers(this.instance);
+		const fm = (placedBlock.instance.FindFirstChild("moduleMarkers")?.GetChildren() ?? []).filter(
+			(p): p is BasePart => p.IsA("BasePart"),
+		);
 		const configMarkers = new Set();
 		for (const [k, v] of pairs(this.block.weaponConfig!.markers)) {
 			configMarkers.add(k);
@@ -47,6 +52,7 @@ export class WeaponModule {
 			if (!configMarkers.has(m.Name)) throw `Weapon marker "${m.Name}" not found`;
 			this.allMarkers.set(m.Name, {
 				markerInstance: m,
+				localFrame: this.instance.GetPivot().ToObjectSpace(m.CFrame),
 				occupiedWith: {
 					block: undefined,
 					module: undefined,
@@ -89,15 +95,21 @@ export class WeaponModule {
 
 			for (const t of touching) {
 				const touchingBlock = BlockManager.getBlockDataByPart(t); //get the first one
-				marker.occupiedWith.block = touchingBlock;
+
 				if (!touchingBlock) continue;
 				const mod = WeaponModule.allModules[touchingBlock.uuid];
-				if (!mod) continue;
+				if (
+					!mod ||
+					mod.instance.Parent !== this.instance.Parent ||
+					mod.instance.GetAttribute("CombatDestroyed") === true
+				)
+					continue;
 				const config = this.block.weaponConfig!.markers[k];
 
 				//check if the id of the block is the same as allowed for this module
-				if (config.allowedBlockIds === undefined) continue;
-				if (config.allowedBlockIds.indexOf(mod.block.id) < 0) continue;
+				const upgrade = k === "upgradeMarker" && mod.block.weaponConfig?.type === "UPGRADE";
+				if (!upgrade && !config.allowedBlockIds?.includes(mod.block.id)) continue;
+				marker.occupiedWith.block = touchingBlock;
 				marker.occupiedWith.module = mod;
 
 				if (marker.occupiedWith.module.parentCollection !== this.parentCollection)
@@ -115,6 +127,7 @@ export class ModuleCollection {
 	readonly modules: Set<WeaponModule> = new Set();
 	readonly emitters: Set<WeaponModule> = new Set();
 	readonly calculatedOutputs: {
+		source: WeaponModule;
 		module: WeaponModule;
 		outputs: weaponMarker[];
 		modifier: projectileModifier;
@@ -155,12 +168,8 @@ export class ModuleCollection {
 	}
 
 	setMarkersVisibility(isVisible: boolean) {
-		isVisible = !isVisible;
 		for (const m of this.modules) {
-			for (const o of m.getModuleMarkers()) {
-				o.markerInstance.Anchored = isVisible;
-				o.markerInstance.Transparency = isVisible ? 1 : 0;
-			}
+			for (const o of m.getModuleMarkers()) o.markerInstance.Transparency = isVisible ? 0 : 1;
 		}
 	}
 
@@ -168,7 +177,9 @@ export class ModuleCollection {
 		outputArray: recalcOut[][],
 		nextModule: WeaponModule,
 		path: recalcOut[] = [],
+		budget = { remaining: 4096 },
 	): recalcOut[] | undefined {
+		if (--budget.remaining < 0 || path.size() >= 128 || outputArray.size() >= 256) return;
 		//check if there's a loop
 		for (const p of path) if (p.module === nextModule) return;
 
@@ -178,27 +189,14 @@ export class ModuleCollection {
 		//get all markers
 		for (const [n, e] of pairs(nextModule.allMarkers)) {
 			if (e.occupiedWith.module) {
-				//get marker rotation
-				const [x1, y1, z1] = e.markerInstance.GetPivot().ToEulerAnglesXYZ();
-				const markerRotation = new Vector3(x1, y1, z1);
-
-				//get module rotation
-				const [x2, y2, z2] = e.occupiedWith.module.instance.GetPivot().ToEulerAnglesXYZ();
-				const moduleRotation = new Vector3(x2, y2, z2);
-
-				//get offset in degrees
-				const hardcodedRotationOffset = 5;
-				const offset = moduleRotation
-					.sub(markerRotation)
-					.Abs()
-					.apply((v) => math.deg(v));
-
-				// print(offset);
-				// //add module if offset is lower than "hardcodedRotationOffset"
+				if (e.occupiedWith.module.block.weaponConfig?.type === "UPGRADE") continue;
+				// Compare axes instead of Euler angles, which wrap at +/-180 degrees.
+				const marker = e.markerInstance.GetPivot(),
+					frame = e.occupiedWith.module.instance.GetPivot(),
+					tolerance = math.cos(math.rad(5));
 				if (
-					offset.X <= hardcodedRotationOffset &&
-					offset.Y <= hardcodedRotationOffset &&
-					offset.Z <= hardcodedRotationOffset
+					marker.RightVector.Dot(frame.RightVector) >= tolerance &&
+					marker.UpVector.Dot(frame.UpVector) >= tolerance
 				)
 					connectedModules.push(e.occupiedWith.module);
 
@@ -218,8 +216,11 @@ export class ModuleCollection {
 
 		// print(obj.activeOutputs);
 		// add modifier because outputs split, i.e. divide output between modules
-		if (connectedModules.size() > 0) {
-			const baseModifierValue: modifierValue = { value: 1 / activeOutputs.size(), isRelative: true };
+		if (connectedModules.size() + activeOutputs.size() > 1) {
+			const baseModifierValue: modifierValue = {
+				value: 1 / (connectedModules.size() + activeOutputs.size()),
+				isRelative: true,
+			};
 			obj.extraModifier = {
 				speedModifier: baseModifierValue,
 				lifetimeModifier: baseModifierValue,
@@ -243,7 +244,7 @@ export class ModuleCollection {
 		if (connectedModules.size() === 0) return path;
 
 		for (const e of connectedModules) {
-			const p = this.recursivePath(outputArray, e, [...path]);
+			const p = this.recursivePath(outputArray, e, [...path], budget);
 			if (!p) continue;
 			outputArray.push(p);
 		}
@@ -254,17 +255,18 @@ export class ModuleCollection {
 		if (modifiers.size() === 0) return;
 		const result: projectileModifier = {};
 
+		const additions: projectileModifier = {},
+			multipliers: projectileModifier = {};
 		for (const m of modifiers) {
 			for (const [k, v] of pairs(m)) {
-				result[k] ??= { value: 0, isRelative: v.isRelative ?? false };
-				if ((v.isRelative ?? false) !== result[k].isRelative) {
-					result[k].value *= v.value;
-					continue;
-				}
-				result[k].value += v.value;
+				if (v.value !== v.value || math.abs(v.value) === math.huge) continue;
+				if (v.isRelative) multipliers[k] = { value: (multipliers[k]?.value ?? 1) * v.value };
+				else additions[k] = { value: (additions[k]?.value ?? 0) + v.value };
 			}
 		}
-
+		for (const [k, v] of pairs(additions))
+			result[k] = { value: v.value * (multipliers[k]?.value ?? 1), isRelative: false };
+		for (const [k, v] of pairs(multipliers)) if (!additions[k]) result[k] = { value: v.value, isRelative: true };
 		return result;
 	}
 
@@ -275,22 +277,15 @@ export class ModuleCollection {
 		this.calculatedOutputs.clear();
 
 		const getUpgrades = (a: WeaponModule): projectileModifier[] => {
-			const result: projectileModifier[] = [];
-			const upgradePaths: recalcOut[][] = [];
-			this.recursivePath(upgradePaths, a);
-
-			for (const upgradePath of upgradePaths) {
-				const buf: projectileModifier[] = [];
-				for (const m of upgradePath) {
-					if (m.module.block.weaponConfig?.type !== "UPGRADE") continue;
-					buf.push(m.module.block.weaponConfig!.modifier);
-					if (m.extraModifier) buf.push(m.extraModifier);
+			const result: projectileModifier[] = [],
+				seen = new Set<WeaponModule>();
+			for (const [, marker] of a.allMarkers) {
+				const m = marker.occupiedWith.module;
+				if (m?.block.weaponConfig?.type === "UPGRADE" && !seen.has(m)) {
+					seen.add(m);
+					result.push(m.block.weaponConfig.modifier);
 				}
-				const mod = ModuleCollection.calculateTotalModifier(buf);
-				if (!mod) continue;
-				result.push(mod);
 			}
-
 			return result;
 		};
 
@@ -310,10 +305,11 @@ export class ModuleCollection {
 				if (p.activeOutputs.size() === 0) continue;
 
 				//otherwise add modifier
-				buf.push(p.extraModifier!);
+				if (p.extraModifier) buf.push(p.extraModifier);
 
 				// add the block to the list of outputs
 				this.calculatedOutputs.push({
+					source: path[0].module,
 					module: p.module,
 					modifier: ModuleCollection.calculateTotalModifier(buf) ?? {},
 					outputs: p.activeOutputs,
@@ -328,31 +324,60 @@ export class WeaponModuleSystem extends HostedService {
 	constructor(@inject blockList: BlockList, @inject plots: SharedPlots) {
 		super();
 
-		function updateAll() {
-			for (const [_, m] of pairs(WeaponModule.allModules)) m.update();
-
-			const arr = new Set<ModuleCollection>();
-			for (const [_, m] of pairs(WeaponModule.allModules)) {
-				arr.add(m.parentCollection);
-			}
-			for (const c of arr) c.recalc();
-		}
-
+		const dirty = new Set<Instance>();
+		let nextUpdate = 0;
 		for (const p of plots.plots) {
 			const folder = p.instance.FindFirstChild("Blocks");
-			if (folder === undefined) continue;
-
-			this.event.subscribe(folder.ChildAdded, (block) => {
-				const blockInfo = BlockManager.getBlockDataByBlockModel(block as BlockModel);
-				if (!blockList.blocks[blockInfo.id]?.weaponConfig) return;
-				new WeaponModule(blockInfo, blockList);
-				updateAll();
-			});
-
-			this.event.subscribe(folder.ChildRemoved, (block) => {
-				delete WeaponModule.allModules[BlockManager.getBlockDataByBlockModel(block as BlockModel).uuid];
-				updateAll();
-			});
+			if (!folder) continue;
+			dirty.add(folder);
+			this.event.subscribe(folder.ChildAdded, () => dirty.add(folder));
+			this.event.subscribe(folder.ChildRemoved, () => dirty.add(folder));
 		}
+		this.event.subscribe(RunService.Heartbeat, () => {
+			if (os.clock() < nextUpdate || dirty.size() === 0) return;
+			nextUpdate = os.clock() + 0.1;
+			for (const folder of dirty) {
+				const modules: WeaponModule[] = [];
+				for (const [id, m] of pairs(WeaponModule.allModules))
+					if (!m.instance.Parent) delete WeaponModule.allModules[id];
+				for (const child of folder.GetChildren()) {
+					if (!child.IsA("Model")) continue;
+					const info = BlockManager.getBlockDataByBlockModel(child as BlockModel);
+					if (!blockList.blocks[info.id]?.weaponConfig || !child.FindFirstChild("moduleMarkers")) continue;
+					let m = WeaponModule.allModules[info.uuid];
+					if (!m) {
+						m = new WeaponModule(info, blockList);
+						const primary = child.PrimaryPart;
+						const connection = primary?.GetPropertyChangedSignal("CFrame").Connect(() => {
+							if (primary.Anchored) dirty.add(folder);
+						});
+						const resized = primary?.GetPropertyChangedSignal("Size").Connect(() => {
+							if (primary.Anchored) dirty.add(folder);
+						});
+						const broken = child
+							.GetAttributeChangedSignal("CombatDestroyed")
+							.Connect(() => dirty.add(folder));
+						child.Destroying.Once(() => {
+							connection?.Disconnect();
+							resized?.Disconnect();
+							broken.Disconnect();
+						});
+					}
+					if (child.PrimaryPart?.Anchored)
+						for (const [, marker] of m.allMarkers)
+							marker.localFrame = child.GetPivot().ToObjectSpace(marker.markerInstance.CFrame);
+					m.pregeneratedCollection.modules.clear();
+					m.pregeneratedCollection.emitters.clear();
+					m.pregeneratedCollection.modules.add(m);
+					m.parentCollection = m.pregeneratedCollection;
+					m.parentCollection.init();
+					modules.push(m);
+				}
+				for (const m of modules) m.update();
+				const collections = new Set(modules.map((m) => m.parentCollection));
+				for (const c of collections) c.recalc();
+			}
+			dirty.clear();
+		});
 	}
 }
