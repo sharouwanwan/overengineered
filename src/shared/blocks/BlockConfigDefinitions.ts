@@ -1,6 +1,8 @@
+import { Matrix3 } from "shared/blockLogic/Matrix3";
 import type { BlockLogicFullInputDef } from "shared/blockLogic/BlockLogic";
 
 export const BlockConfigDefinitions = {
+	matrix3: { matrix3: { config: Matrix3.identity } },
 	any: {
 		bool: { config: false as boolean },
 		number: { config: 0 as number },
@@ -9,6 +11,7 @@ export const BlockConfigDefinitions = {
 		byte: { config: 0 as number },
 		color: { config: new Color3(0, 0, 0) },
 		sound: { config: { id: "" as string } },
+		matrix3: { config: Matrix3.identity },
 	},
 	number: {
 		number: { config: 0 as number },

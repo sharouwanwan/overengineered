@@ -10,7 +10,6 @@ export class MainScene extends Scene {
 
 	constructor(@inject mainScreen: MainScreenLayout, @inject popupController: PopupController) {
 		super();
-
 		this.openSettingsAction = this.parent(new Action(() => popupController.showPopup(new SettingsPopup())));
 		this.parent(mainScreen.top.main.addButton("Settings", { iconId: 18626485941 })) //
 			.subscribeToAction(this.openSettingsAction)

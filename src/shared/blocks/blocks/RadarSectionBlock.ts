@@ -1,17 +1,55 @@
 import { Players, RunService } from "@rbxts/services";
 import { t } from "engine/shared/t";
 import { InstanceBlockLogic as InstanceBlockLogic } from "shared/blockLogic/BlockLogic";
+import { inferEnumLogicType } from "shared/blockLogic/BlockLogicTypes";
 import { BlockSynchronizer } from "shared/blockLogic/BlockSynchronizer";
+import { scheduleRadar } from "shared/blockLogic/RadarScheduler";
+import { RadarTargetMemory } from "shared/blockLogic/RadarTargetMemory";
+import { radialFields, radialContains } from "shared/blockLogic/RadialRadarGeometry";
+import { sectionFields, sectionFrame, coneContainsSphere } from "shared/blockLogic/SectionRadarGeometry";
+import { radarBuildTargets } from "shared/blockLogic/SectionRadarTargets";
 import { BlockCreation } from "shared/blocks/BlockCreation";
-import { SharedPlots } from "shared/building/SharedPlots";
-import { CustomRemotes } from "shared/Remotes";
-import { TagUtils } from "shared/utils/TagUtils";
 import type { BlockLogicFullBothDefinitions, InstanceBlockLogicArgs } from "shared/blockLogic/BlockLogic";
 import type { BlockBuilder } from "shared/blocks/Block";
 
 const definition = {
-	inputOrder: ["maxDistance", "detectionSize", "visibility", "detectSelf", "relativePositioning", "minimalDistance"],
+	inputOrder: [
+		"maxDistance",
+		"detectionSize",
+		"visibility",
+		"detectSelf",
+		"relativePositioning",
+		"minimalDistance",
+		"detectPlayers",
+		"holdLostTarget",
+		"selection",
+	],
 	input: {
+		selection: {
+			displayName: "Target Selection",
+			types: {
+				enum: inferEnumLogicType({
+					config: "any",
+					elementOrder: ["any", "nearest", "farthest"],
+					elements: {
+						any: { displayName: "Any", tooltip: "Keep any valid contact; no distance priority." },
+						nearest: { displayName: "Nearest" },
+						farthest: { displayName: "Farthest" },
+					},
+				}),
+			},
+		},
+		detectPlayers: {
+			displayName: "Detect Players",
+			tooltip: "Also detect living players whose character root is inside the detection area.",
+			types: { bool: { config: false } },
+		},
+		holdLostTarget: {
+			displayName: "Hold Lost Target",
+			tooltip:
+				"Keep the last known world position after losing contact. Turn off for range circuits that use zero Offset to restart searching. Cleared when disabled.",
+			types: { bool: { config: false } },
+		},
 		maxDistance: {
 			displayName: "Max Distance",
 			tooltip: "Returns coordinates relative to this block instead of relative to global grid",
@@ -91,14 +129,18 @@ const definitionRadial = {
 	...definition,
 	input: {
 		...definition.input,
+		detectionSize: { ...definition.input.detectionSize, configHidden: true, connectorHidden: true },
 		maxDistance: {
 			...definition.input.maxDistance,
+			displayName: "Detection Diameter",
+			tooltip:
+				"Full width, not radius. For range feedback wire 2 * (Offset magnitude + margin). Reach is half this value.",
 			types: {
 				number: {
 					...definition.input.maxDistance.types.number,
 					clamp: {
 						...definition.input.maxDistance.types.number.clamp,
-						max: definition.input.maxDistance.types.number.clamp.max * 0.5,
+						max: 15000,
 					},
 				},
 			},
@@ -110,191 +152,461 @@ type radarBlock = BlockModel & {
 	RadarView: BasePart | UnionOperation | MeshPart;
 };
 
-if (RunService.IsClient()) {
-	const p = Players.LocalPlayer;
-	CustomRemotes.modes.set.sent.Connect(({ mode }) => {
-		if (mode === "ride") {
-			const blocks = SharedPlots.instance.getPlotComponentByOwnerID(p.UserId).getBlocks();
+// Legacy assets keep this child for compatibility. It is no longer a sensor or preview.
+const hideRadarView = (block: Model) => {
+	const view = block.FindFirstChild("RadarView");
+	if (!view?.IsA("BasePart")) return;
+	view.CanCollide = false;
+	view.CanTouch = false;
+	view.CanQuery = false;
+	view.CastShadow = false;
+	view.Transparency = 1;
+	view.Size = new Vector3(0.1, 0.1, 0.1);
+};
 
-			for (const b of blocks) {
-				if (!b.PrimaryPart) continue;
-				ownDetectablesSet.add(b.PrimaryPart);
-			}
-			return;
-		}
+// Build contacts use their bounding sphere; player contacts use the living root point.
+const liveRadarContact = (part: BasePart | undefined, sphere: number): part is BasePart =>
+	part?.Parent !== undefined && (sphere > 0 || (part.Parent.FindFirstChildOfClass("Humanoid")?.Health ?? 0) > 0);
 
-		ownDetectablesSet.clear();
-	});
-}
-
-const updateEventType = t.interface({
-	block: t.instance("Model").nominal("blockModel").as<radarBlock>(),
-	size: t.vector3,
-	offset: t.cframe,
-	position: t.vector3,
-});
-
-type UpdateData = t.Infer<typeof updateEventType>;
-
-const events = {
-	updateSize: new BlockSynchronizer(
-		"b_radar_size_update",
-		updateEventType, //useless comment just to calm down the text formatter
-		({ block, size, offset, position }: UpdateData) => {
-			block.RadarView.Size = size;
-			block.RadarView.Position = position;
-			block.RadarView.PivotOffset = offset;
-		},
-	),
-} as const;
-
-const ownDetectablesSet = new Set<BasePart>();
-
-export type { Logic as RadarSectionBlockLogic };
-@injectable
-class Logic extends InstanceBlockLogic<typeof definition, radarBlock> {
-	constructor(
-		def: typeof definition,
-		block: InstanceBlockLogicArgs,
-		sizeAndOffsetCalculator: (
-			view: MeshPart | UnionOperation | BasePart,
-			detectionSize: number,
-			maxDistance: number,
-		) => void,
-	) {
-		super(def, block);
-
-		let updateTask: thread;
-		let minDistance = 0;
-		const view = this.instance.FindFirstChild("RadarView") as MeshPart | UnionOperation | BasePart;
-		const metalPlate = this.instance.FindFirstChild("MetalBase") as BasePart;
-
-		this.onk(["visibility"], ({ visibility }) => (view.Transparency = visibility ? 0.8 : 1));
-		this.onk(["relativePositioning"], ({ relativePositioning }) => (this.isRelativePosition = relativePositioning));
-		this.onk(["detectionSize", "maxDistance"], ({ detectionSize, maxDistance }) => {
-			const pivo = metalPlate.GetPivot();
-			view.Position = pivo.PointToWorldSpace(Vector3.xAxis.mul(maxDistance / 2 + 0.5));
-			view.Size = new Vector3(view.Size.X, maxDistance, view.Size.Z);
-
-			sizeAndOffsetCalculator(view, detectionSize, maxDistance);
-			this.triggerDistanceListUpdate = true;
+const radialSync = new BlockSynchronizer(
+	"b_radial_field",
+	t.interface({
+		block: t.instance("Model").nominal("blockModel").as<BlockModel>(),
+		radius: t.number,
+		enabled: t.boolean,
+	}),
+	({ block, radius, enabled }) => {
+		if (!radialFields.has(block)) block.Destroying.Once(() => radialFields.delete(block));
+		radialFields.set(block, { radius: math.clamp(radius, 0.5, 7500), enabled });
+		hideRadarView(block);
+	},
+);
+class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radarBlock> {
+	constructor(block: InstanceBlockLogicArgs) {
+		super(definitionRadial, block);
+		// Feedback circuits need a defined zero before their first input evaluation.
+		this.output.distance.set("vector3", Vector3.zero);
+		const view = this.instance.RadarView;
+		hideRadarView(this.instance);
+		const outline = new Instance("WireframeHandleAdornment");
+		outline.Name = "RadialRadarOutline";
+		outline.Adornee = this.instance.PrimaryPart;
+		outline.Color3 = view.Color;
+		outline.Thickness = 1;
+		outline.Transparency = 0.25;
+		outline.Visible = false;
+		outline.Parent = this.instance;
+		this.onDestroy(() => {
+			outline.Destroy();
+			radialFields.delete(this.instance);
 		});
-
-		this.onAlwaysInputs(({ minimalDistance }) => (minDistance = minimalDistance));
-
-		const selfDetect = this.initializeInputCache("detectSelf");
-		this.event.subscribe(view.Touched, (part) => {
-			//just to NOT detect radar view things
-			// probably pointless check
-			// since it detects only colboxes anyway
-			// ...or does it?
-			// Hey, VSausage. Michael here.
-			// Can the radar detect non-colboxes?
-			if (part.HasTag(TagUtils.allTags.SPECIAL_RADARVIEW)) return;
-
-			//just to NOT detect own blocks
-			if (!selfDetect.get() && ownDetectablesSet.has(part)) return;
-
-			if (!minDistance) return;
-
-			this.allTouchedBlocks.add(part);
-			this.triggerDistanceListUpdate = true;
+		let radius = 50,
+			minimum = 5,
+			visible = false,
+			detectOwn = true,
+			players = false,
+			relative = true,
+			hold = false;
+		let farthest = false,
+			anyTarget = true;
+		this.onk(["selection"], ({ selection }) => {
+			farthest = selection === "farthest";
+			anyTarget = selection === "any";
+			candidates = undefined;
+			best = undefined;
+			target = undefined;
 		});
-
-		this.event.subscribe(view.TouchEnded, (part) => {
-			this.allTouchedBlocks.delete(part);
-			if (this.triggerDistanceListUpdate) return;
-			this.triggerDistanceListUpdate = part === this.closestDetectedPart;
-		});
-
-		const setView = () => {
-			view.AssemblyLinearVelocity = Vector3.zero;
-			view.AssemblyAngularVelocity = Vector3.zero;
-			view.PivotTo(this.instance.PrimaryPart!.CFrame);
+		let target: BasePart | undefined, best: BasePart | undefined;
+		let targetSphere = 0,
+			bestSphere = 0,
+			bestDistance = farthest ? -1 : math.huge,
+			index = 0;
+		let candidates: readonly Model[] | undefined;
+		const memory = new RadarTargetMemory();
+		const invalidate = () => {
+			candidates = undefined;
+			target = undefined;
 		};
-
-		// For actual contacts
-		this.event.subscribe(RunService.Stepped, () => {
-			if (this.closestDetectedPart?.Parent === undefined || this.triggerDistanceListUpdate) {
-				this.triggerDistanceListUpdate = false;
-
-				this.closestDetectedPart = this.findClosestPart(minDistance);
-
-				if (updateTask) task.cancel(updateTask);
-				updateTask = task.delay(5, () => (this.triggerDistanceListUpdate = true));
+		const publish = (enabled: boolean) => radialSync.send({ block: this.instance, radius, enabled });
+		let visualDirty = true,
+			syncDirty = true,
+			nextSync = 0;
+		this.onk(["maxDistance"], ({ maxDistance }) => {
+			const nextRadius = maxDistance / 2;
+			if (radius === nextRadius) return;
+			radius = nextRadius;
+			visualDirty = syncDirty = true;
+			radialFields.set(this.instance, { radius, enabled: this.isEnabled() });
+		});
+		const redraw = () => {
+			outline.Clear();
+			const xy: Vector3[] = [],
+				xz: Vector3[] = [],
+				yz: Vector3[] = [];
+			for (let i = 0; i < 48; i++) {
+				const angle = (i * math.pi * 2) / 48,
+					a = math.cos(angle) * radius,
+					b = math.sin(angle) * radius;
+				xy.push(new Vector3(a, b, 0));
+				xz.push(new Vector3(a, 0, b));
+				yz.push(new Vector3(0, a, b));
 			}
+			outline.AddPath(xy, true);
+			outline.AddPath(xz, true);
+			outline.AddPath(yz, true);
+		};
+		this.event.subscribe(RunService.Heartbeat, () => {
+			// Local geometry follows every frame; only remote RWR updates are rate limited.
+			if (outline.Visible && visualDirty) {
+				visualDirty = false;
+				redraw();
+			}
+			if (syncDirty && os.clock() >= nextSync) {
+				syncDirty = false;
+				nextSync = os.clock() + 0.1;
+				publish(this.isEnabled());
+			}
+		});
+		this.onk(["minimalDistance", "detectSelf", "detectPlayers"], (values) => {
+			minimum = values.minimalDistance;
+			detectOwn = values.detectSelf;
+			players = values.detectPlayers;
+			invalidate();
+		});
+		this.onk(["relativePositioning", "holdLostTarget"], (values) => {
+			relative = values.relativePositioning;
+			hold = values.holdLostTarget;
+		});
+		this.onk(["visibility"], (values) => {
+			visible = values.visibility;
+			outline.Visible = visible && this.isEnabled();
+		});
+		this.event.subscribeRegistration(() =>
+			scheduleRadar(() => {
+				const origin = this.instance.PrimaryPart!.Position;
+				const consider = (part: BasePart, sphere: number) => {
+					const delta = part.Position.sub(origin),
+						distance = delta.Dot(delta);
+					if (
+						distance < minimum * minimum ||
+						(anyTarget
+							? best !== undefined
+							: farthest
+								? distance <= bestDistance
+								: distance >= bestDistance) ||
+						!radialContains(delta, radius, sphere)
+					)
+						return;
+					best = part;
+					bestSphere = sphere;
+					bestDistance = distance;
+				};
+				if (!candidates) {
+					candidates = radarBuildTargets(this.instance);
+					index = 0;
+					// Any keeps an existing valid contact instead of walking the build list again.
+					best = anyTarget && liveRadarContact(target, targetSphere) ? target : undefined;
+					bestSphere = targetSphere;
+				}
+				const previousBest = best;
+				best = undefined;
+				bestDistance = farthest ? -1 : math.huge;
+				if (liveRadarContact(previousBest, bestSphere)) consider(previousBest, bestSphere);
+				if (players)
+					for (const player of Players.GetPlayers()) {
+						if (!detectOwn && RunService.IsClient() && player === Players.LocalPlayer) continue;
+						const character = player.Character,
+							humanoid = character?.FindFirstChildOfClass("Humanoid"),
+							root = character?.FindFirstChild("HumanoidRootPart");
+						if (humanoid && humanoid.Health > 0 && root?.IsA("BasePart")) consider(root, 0);
+					}
+				const start = os.clock();
+				let checked = 0;
+				while (index < candidates.size() && !(anyTarget && best) && checked++ < 256) {
+					const model = candidates[index++],
+						root = model.PrimaryPart;
+					if (model === this.instance || !root?.Parent || !model.Parent || model.Parent.Name !== "Blocks")
+						continue;
+					if (!detectOwn && model.Parent === this.instance.Parent) continue;
+					consider(root, root.Size.Magnitude / 2);
+					if (os.clock() - start >= 0.002) break;
+				}
+				if (best || index >= candidates.size()) {
+					target = best;
+					targetSphere = bestSphere;
+				}
+				if ((anyTarget && best) || index >= candidates.size()) candidates = undefined;
+				return candidates !== undefined;
+			}),
+		);
+		this.onTicc(() => {
+			const origin = this.instance.GetPivot();
+			if (!liveRadarContact(target, targetSphere)) target = undefined;
+			if (target) {
+				const delta = target.Position.sub(this.instance.PrimaryPart!.Position);
+				if (delta.Dot(delta) < minimum * minimum || !radialContains(delta, radius, targetSphere))
+					target = undefined;
+			}
+			const position = memory.update(target?.Parent ? target.Position : undefined, hold);
 			this.output.distance.set(
 				"vector3",
-				this.closestDetectedPart ? this.getDistanceTo(this.closestDetectedPart) : Vector3.zero,
+				position
+					? relative
+						? origin.PointToObjectSpace(position)
+						: position.sub(origin.Position)
+					: Vector3.zero,
 			);
-			setView();
 		});
-		// For rendering (so people don't think it lags)
-		this.event.subscribe(RunService.PreRender, setView);
-
+		this.onEnable(() => {
+			invalidate();
+			publish(true);
+			outline.Visible = visible;
+		});
 		this.onDisable(() => {
-			if (view) view.Transparency = 1;
-			this.allTouchedBlocks.clear();
+			invalidate();
+			memory.clear();
+			publish(false);
+			outline.Visible = false;
+			this.output.distance.set("vector3", Vector3.zero);
 		});
 	}
+}
 
-	private isRelativePosition = false;
-	private triggerDistanceListUpdate: boolean = false;
-	private closestDetectedPart: BasePart | undefined = undefined;
-	private readonly allTouchedBlocks: Set<BasePart> = new Set<BasePart>();
-
-	private getDistanceTo = (part: BasePart) => {
-		if (this.instance === undefined) return Vector3.zero;
-		if (part === undefined) return Vector3.zero;
-		if (this.isRelativePosition) return this.instance.GetPivot().ToObjectSpace(part.GetPivot()).Position;
-		return part.GetPivot().Position.sub(this.instance.GetPivot().Position);
-	};
-
-	private findClosestPart(minDist: number) {
-		let smallestDistance: Vector3 | undefined;
-		let closestPart: BasePart | undefined;
-
-		for (const bp of this.allTouchedBlocks) {
-			const d = this.getDistanceTo(bp);
-
-			if (d.Magnitude < minDist) continue;
-			if (smallestDistance === undefined) {
-				[smallestDistance, closestPart] = [d, bp];
-				continue;
+const sectionDefinition = {
+	...definition,
+	inputOrder: [...definition.inputOrder, "coneAngle"],
+	input: {
+		...definition.input,
+		maxDistance: {
+			...definition.input.maxDistance,
+			tooltip: "Detection length along the cone axis.",
+			types: { number: { config: 100, clamp: { showAsSlider: true, min: 1, max: 15000 } } },
+		},
+		minimalDistance: {
+			...definition.input.minimalDistance,
+			types: { number: { config: 5, clamp: { showAsSlider: true, min: 0, max: 15000 } } },
+		},
+		coneAngle: {
+			displayName: "Cone Angle (degrees)",
+			tooltip: "Full field of view. Zero retains legacy width wiring.",
+			types: { number: { config: 5, clamp: { showAsSlider: true, min: 0, max: 120 } } },
+		},
+		detectionSize: { ...definition.input.detectionSize, configHidden: true, connectorHidden: true },
+	},
+} satisfies BlockLogicFullBothDefinitions;
+const sectionSync = new BlockSynchronizer(
+	"b_section_field",
+	t.interface({
+		block: t.instance("Model").nominal("blockModel").as<BlockModel>(),
+		length: t.number,
+		radius: t.number,
+		enabled: t.boolean,
+	}),
+	({ block, length, radius, enabled }) => {
+		if (!sectionFields.has(block)) block.Destroying.Once(() => sectionFields.delete(block));
+		sectionFields.set(block, {
+			length: math.clamp(length, 1, 15000),
+			radius: math.clamp(radius, 0, 71000),
+			enabled,
+		});
+		hideRadarView(block);
+	},
+);
+class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, radarBlock> {
+	constructor(block: InstanceBlockLogicArgs) {
+		super(sectionDefinition, block);
+		this.output.distance.set("vector3", Vector3.zero);
+		const view = this.instance.RadarView;
+		hideRadarView(this.instance);
+		const outline = new Instance("WireframeHandleAdornment");
+		outline.Adornee = this.instance.PrimaryPart;
+		outline.Color3 = view.Color;
+		outline.Thickness = 1;
+		outline.Transparency = 0.25;
+		outline.Visible = false;
+		outline.Parent = this.instance;
+		this.onDestroy(() => {
+			outline.Destroy();
+			sectionFields.delete(this.instance);
+		});
+		let length = 100,
+			radius = 100 * math.tan(math.rad(2.5)),
+			minimum = 5,
+			visible = false,
+			relative = true,
+			detectOwn = true,
+			players = false,
+			hold = false;
+		let farthest = false,
+			anyTarget = true;
+		this.onk(["selection"], ({ selection }) => {
+			farthest = selection === "farthest";
+			anyTarget = selection === "any";
+			candidates = undefined;
+			best = undefined;
+			target = undefined;
+		});
+		let target: BasePart | undefined;
+		let candidates: readonly Model[] | undefined;
+		let index = 0;
+		let best: BasePart | undefined;
+		let targetSphere = 0,
+			bestSphere = 0;
+		let bestDistance = farthest ? -1 : math.huge;
+		let frame = sectionFrame(this.instance);
+		const memory = new RadarTargetMemory();
+		const invalidate = () => {
+			candidates = undefined;
+			target = undefined;
+		};
+		const publish = (enabled: boolean) => sectionSync.send({ block: this.instance, length, radius, enabled });
+		let visualDirty = true,
+			syncDirty = true,
+			nextSync = 0;
+		const redraw = () => {
+			outline.Clear();
+			const rim: Vector3[] = [];
+			for (let i = 0; i < 32; i++) {
+				const angle = (i * math.pi) / 16;
+				const point = new Vector3(radius * math.cos(angle), length + 0.4, radius * math.sin(angle));
+				rim.push(point);
+				if (i % 4 === 0) outline.AddLine(new Vector3(0, 0.4, 0), point);
 			}
-
-			if (d.Magnitude > smallestDistance.Magnitude) continue;
-			[smallestDistance, closestPart] = [d, bp];
-		}
-		return closestPart;
-	}
-}
-
-class RadialRadarLogic extends Logic {
-	constructor(block: InstanceBlockLogicArgs) {
-		const zeroOffset = new CFrame(0, 0, 0);
-		super(definitionRadial, block, (view, detectionSize, maxDistance) => {
-			events.updateSize.send({
-				block: this.instance,
-				size: new Vector3(maxDistance, maxDistance, maxDistance),
-				offset: zeroOffset,
-				position: this.instance.GetPivot().Position,
-			});
+			outline.AddPath(rim, true);
+		};
+		this.event.subscribe(RunService.Heartbeat, () => {
+			if (outline.Visible && visualDirty) {
+				visualDirty = false;
+				redraw();
+			}
+			if (syncDirty && os.clock() >= nextSync) {
+				syncDirty = false;
+				nextSync = os.clock() + 0.1;
+				publish(this.isEnabled());
+			}
 		});
-	}
-}
-
-class RadarSectionLogic extends Logic {
-	constructor(block: InstanceBlockLogicArgs) {
-		super(definition, block, (view, detectionSize, maxDistance) => {
-			const halvedMaxDist = maxDistance / 2;
-			const ds = detectionSize * (detectionSize - math.sqrt(halvedMaxDist / (maxDistance + halvedMaxDist))) * 10;
-			events.updateSize.send({
-				block: this.instance,
-				size: new Vector3(ds, view.Size.Y, ds),
-				offset: new CFrame(0, -view.Size.Y / 2 - 0.4, 0),
-				position: view.Position,
-			});
+		this.onk(["maxDistance", "coneAngle", "detectionSize"], (values) => {
+			const nextLength = values.maxDistance;
+			const nextRadius =
+				values.coneAngle > 0
+					? nextLength * math.tan(math.rad(values.coneAngle / 2))
+					: values.detectionSize * (values.detectionSize - math.sqrt(1 / 3)) * 5;
+			if (length === nextLength && radius === nextRadius) return;
+			length = nextLength;
+			radius = nextRadius;
+			// Preserve acquisition; range changes do not restart a partial search.
+			visualDirty = syncDirty = true;
+			sectionFields.set(this.instance, { length, radius, enabled: this.isEnabled() });
+		});
+		this.onk(["minimalDistance", "detectSelf", "detectPlayers"], (values) => {
+			minimum = values.minimalDistance;
+			detectOwn = values.detectSelf;
+			players = values.detectPlayers;
+			invalidate();
+		});
+		this.onk(["relativePositioning", "holdLostTarget"], (values) => {
+			relative = values.relativePositioning;
+			hold = values.holdLostTarget;
+		});
+		this.onk(["visibility"], (values) => {
+			visible = values.visibility;
+			outline.Visible = visible && this.isEnabled();
+		});
+		this.event.subscribeRegistration(() =>
+			scheduleRadar(() => {
+				frame = sectionFrame(this.instance);
+				const consider = (part: BasePart, sphere: number) => {
+					const point = frame.PointToObjectSpace(part.Position);
+					const delta = part.Position.sub(frame.Position);
+					const distance = delta.Dot(delta);
+					if (
+						distance < minimum * minimum ||
+						(anyTarget
+							? best !== undefined
+							: farthest
+								? distance <= bestDistance
+								: distance >= bestDistance) ||
+						!coneContainsSphere(point, sphere, length, radius)
+					)
+						return;
+					bestDistance = distance;
+					best = part;
+					bestSphere = sphere;
+				};
+				if (candidates) {
+					const previousBest = best;
+					best = undefined;
+					bestDistance = farthest ? -1 : math.huge;
+					if (liveRadarContact(previousBest, bestSphere)) consider(previousBest, bestSphere);
+				}
+				if (!candidates) {
+					candidates = radarBuildTargets(this.instance);
+					index = 0;
+					best = undefined;
+					bestDistance = farthest ? -1 : math.huge;
+					frame = sectionFrame(this.instance);
+					if (anyTarget && liveRadarContact(target, targetSphere)) consider(target, targetSphere);
+					if (players)
+						for (const player of Players.GetPlayers()) {
+							if (!detectOwn && RunService.IsClient() && player === Players.LocalPlayer) continue;
+							const character = player.Character,
+								humanoid = character?.FindFirstChildOfClass("Humanoid"),
+								root = character?.FindFirstChild("HumanoidRootPart");
+							if (humanoid && humanoid.Health > 0 && root?.IsA("BasePart")) consider(root, 0);
+						}
+				}
+				const start = os.clock();
+				let checked = 0;
+				while (index < candidates.size() && !(anyTarget && best) && checked++ < 256) {
+					const model = candidates[index++];
+					const root = model.PrimaryPart;
+					if (model === this.instance || !model.Parent || model.Parent.Name !== "Blocks" || !root?.Parent)
+						continue;
+					if (!detectOwn && model.Parent === this.instance.Parent) continue;
+					consider(root, root.Size.Magnitude / 2);
+					if (os.clock() - start >= 0.002) break;
+				}
+				if (best || index >= candidates.size()) {
+					target = best;
+					targetSphere = bestSphere;
+				}
+				if ((anyTarget && best) || index >= candidates.size()) candidates = undefined;
+				return candidates !== undefined;
+			}),
+		);
+		this.onTicc(() => {
+			if (!liveRadarContact(target, targetSphere)) target = undefined;
+			if (target) {
+				const frame = sectionFrame(this.instance),
+					delta = target.Position.sub(frame.Position);
+				if (
+					delta.Dot(delta) < minimum * minimum ||
+					!coneContainsSphere(frame.PointToObjectSpace(target.Position), targetSphere, length, radius)
+				)
+					target = undefined;
+			}
+			const position = memory.update(target?.Parent ? target.Position : undefined, hold),
+				origin = this.instance.GetPivot();
+			this.output.distance.set(
+				"vector3",
+				position
+					? relative
+						? origin.PointToObjectSpace(position)
+						: position.sub(origin.Position)
+					: Vector3.zero,
+			);
+		});
+		this.onEnable(() => {
+			invalidate();
+			publish(true);
+			outline.Visible = visible;
+		});
+		this.onDisable(() => {
+			invalidate();
+			memory.clear();
+			publish(false);
+			outline.Visible = false;
+			this.output.distance.set("vector3", Vector3.zero);
 		});
 	}
 }
@@ -304,15 +616,15 @@ export const RadarBlocks = [
 		...BlockCreation.defaults,
 		id: "radarsection",
 		displayName: "Radar Section",
-		description: "Returns the position of the closest object in it's field of view",
+		description: "Detects a build or optional player in its cone, with Any/Nearest/Farthest selection.",
 
-		logic: { definition, ctor: RadarSectionLogic },
+		logic: { definition: sectionDefinition, ctor: RadarSectionLogic },
 	},
 	{
 		...BlockCreation.defaults,
 		id: "radialradar",
 		displayName: "Radial Radar",
-		description: "Returns the position of the closest object in it's spherical field of view",
+		description: "Detects a build or optional player in its sphere, with Any/Nearest/Farthest selection.",
 
 		logic: { definition: definitionRadial, ctor: RadialRadarLogic },
 	},

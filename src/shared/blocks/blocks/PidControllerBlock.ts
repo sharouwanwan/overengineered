@@ -1,11 +1,37 @@
 import { BlockLogic } from "shared/blockLogic/BlockLogic";
+import { PidState } from "shared/blockLogic/PidState";
 import { BlockCreation } from "shared/blocks/BlockCreation";
 import type { BlockLogicArgs, BlockLogicFullBothDefinitions } from "shared/blockLogic/BlockLogic";
 import type { BlockBuilder } from "shared/blocks/Block";
 
 const definition = {
-	inputOrder: ["target", "p", "i", "d", "now", "imin", "imax"],
+	inputOrder: [
+		"target",
+		"p",
+		"i",
+		"d",
+		"now",
+		"imin",
+		"imax",
+		"measurementDerivative",
+		"filter",
+		"limitOutput",
+		"outputMin",
+		"outputMax",
+		"reset",
+	],
 	input: {
+		filter: { displayName: "Derivative filter seconds", types: { number: { config: 0 } }, connectorHidden: true },
+		outputMin: { displayName: "Minimum output", types: { number: { config: 0 } }, connectorHidden: true },
+		outputMax: { displayName: "Maximum output", types: { number: { config: 0 } }, connectorHidden: true },
+		measurementDerivative: {
+			displayName: "Derivative on measurement",
+			types: { bool: { config: false } },
+			connectorHidden: true,
+		},
+		limitOutput: { displayName: "Limit output", types: { bool: { config: false } }, connectorHidden: true },
+		reset: { displayName: "Reset", types: { bool: { config: false } }, connectorHidden: true },
+
 		target: {
 			displayName: "Target value",
 			types: {
@@ -82,31 +108,12 @@ class Logic extends BlockLogic<typeof definition> {
 	constructor(block: BlockLogicArgs) {
 		super(definition, block);
 
-		let inputValues = {
-			p: 0,
-			i: 0,
-			d: 0,
-			target: 0,
-			now: 0,
-			imin: 0,
-			imax: 0,
-		};
-
-		this.on((data) => (inputValues = data));
-
-		let errorPrev = 0;
-		let integral = 0;
-		this.onTicc(({ dt }) => {
-			const errorCost = inputValues.target - inputValues.now;
-			// limitation of the integral, since the error during the delay will accumulate infinitely
-			integral = math.clamp(integral + errorCost * dt, inputValues.imin, inputValues.imax);
-			const derivative = (errorCost - errorPrev) / dt;
-			const output = inputValues.p * errorCost + inputValues.i * integral + inputValues.d * derivative;
-
-			errorPrev = errorCost;
-
-			this.output.integral.set("number", integral);
-			this.output.output.set("number", output);
+		const pid = new PidState();
+		this.onDisable(() => pid.reset());
+		this.onAlwaysInputs((inputs, { dt }) => {
+			const result = pid.step(inputs, dt);
+			this.output.integral.set("number", result.integral);
+			this.output.output.set("number", result.output);
 		});
 	}
 }

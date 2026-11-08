@@ -25,7 +25,6 @@ const definition = {
 			displayName: "Default value",
 			types: BlockConfigDefinitions.any,
 			group: "1",
-			connectorHidden: true,
 		},
 		reset: {
 			displayName: "Reset",
@@ -48,19 +47,14 @@ class Logic extends BlockLogic<typeof definition> {
 	constructor(block: BlockLogicArgs) {
 		super(definition, block);
 
-		this.onk(["defaultValue"], ({ defaultValue, defaultValueType, defaultValueChanged }) => {
-			if (!defaultValueChanged) return;
-			this.output.result.set(defaultValueType, defaultValue);
+		let initialized = false;
+		const reset = this.initializeInputCache("reset");
+		this.onk(["defaultValue", "reset"], ({ defaultValue, defaultValueType, reset }) => {
+			if (!initialized || reset) this.output.result.set(defaultValueType, defaultValue);
+			initialized = true;
 		});
-		this.onk(["value", "set"], ({ value, valueType, set }) => {
-			if (!set) return;
-			this.output.result.set(valueType, value);
-		});
-
-		this.onk(["reset", "defaultValue"], ({ reset, resetChanged, defaultValue, defaultValueType }) => {
-			if (resetChanged && reset) {
-				this.output.result.set(defaultValueType, defaultValue);
-			}
+		this.onk(["value", "set", "reset"], ({ value, valueType, set }) => {
+			if (set && !reset.tryGet()) this.output.result.set(valueType, value);
 		});
 	}
 }

@@ -1,6 +1,8 @@
 import { Players, ReplicatedStorage, RunService } from "@rbxts/services";
+import { acceptRemote } from "engine/shared/event/RemoteValidation";
 import { ArgsSignal } from "engine/shared/event/Signal";
 import { Strings } from "engine/shared/fixes/String.propmacro";
+import { validRequest } from "shared/remotes/RequestValidation";
 
 export type CreatableRemoteEvents = "UnreliableRemoteEvent" | "RemoteEvent";
 export type CreatableRemoteFunctions = "RemoteFunction";
@@ -33,6 +35,11 @@ type RemoteName = string | Instances[CreatableRemoteEvents | CreatableRemoteFunc
 
 abstract class PERemoteEvent<TEvent extends Instance> {
 	protected readonly event: TEvent;
+
+	protected acceptsPlayer(player: Player): boolean {
+		const gui = this.event.FindFirstAncestorWhichIsA("PlayerGui");
+		return gui === undefined || gui.Parent === player;
+	}
 
 	protected constructor(name: RemoteName, eventType: CreatableRemoteEvents | CreatableRemoteFunctions) {
 		if (typeIs(name, "Instance")) {
@@ -72,6 +79,8 @@ export class C2SRemoteEvent<TArg = undefined> extends PERemoteEvent<CustomRemote
 
 		if (RunService.IsServer()) {
 			this.event.OnServerEvent.Connect((player, arg) => {
+				if (!this.acceptsPlayer(player) || !acceptRemote(player, arg) || !validRequest(this.event.Name, arg))
+					return;
 				try {
 					this.invoked.Fire(player, arg);
 				} catch (err) {
@@ -224,7 +233,7 @@ export class S2C2SRemoteFunction<TArg = undefined, TResp extends Response = Resp
 
 	/** @client */
 	private invoked?: (arg: TArg) => TResp;
-	private readonly middlewares: WaiterMiddleware[] = [];
+	private readonly middlewares: WaiterMiddleware[] = [PERemoteEventMiddlewares.timeout(30)];
 	constructor(name: RemoteName) {
 		super(name, "RemoteFunction");
 
@@ -270,7 +279,7 @@ export class S2C2SRemoteFunction<TArg = undefined, TResp extends Response = Resp
 		const { ret, wait } = waiter;
 
 		const promise = Promise.try(() => this.event.InvokeClient(player, arg!));
-		promise.andThen(ret);
+		promise.andThen(ret).catch((err) => ret({ success: false, message: tostring(err) }));
 
 		const result = wait();
 		if (isCanceled(result)) {
@@ -305,13 +314,15 @@ export class C2S2CRemoteFunction<TArg = undefined, TResp extends Response = Resp
 	/** @server */
 	private invoked?: (player: Player, arg: TArg) => TResp;
 
-	private readonly middlewares: WaiterMiddleware[] = [];
+	private readonly middlewares: WaiterMiddleware[] = [PERemoteEventMiddlewares.timeout(30)];
 
 	constructor(name: RemoteName) {
 		super(name, "RemoteFunction");
 
 		if (RunService.IsServer()) {
 			this.event.OnServerInvoke = (player, arg) => {
+				if (!this.acceptsPlayer(player) || !acceptRemote(player, arg) || !validRequest(this.event.Name, arg))
+					return { success: false, message: "Invalid or excessive request" };
 				if (!this.invoked) {
 					return { success: false, message: `Event ${name} was not subscribed to` };
 				}
@@ -372,7 +383,7 @@ export class C2S2CRemoteFunction<TArg = undefined, TResp extends Response = Resp
 		const { ret, wait } = waiter;
 
 		const promise = Promise.try(() => this.event.InvokeServer(arg!));
-		promise.andThen(ret);
+		promise.andThen(ret).catch((err) => ret({ success: false, message: tostring(err) }));
 
 		const result = wait();
 		this._completed.Fire(result);
@@ -400,9 +411,19 @@ export class C2CRemoteEvent<TArg = undefined> extends PERemoteEvent<
 		super(name, eventType);
 
 		if (RunService.IsServer()) {
-			this.event.OnServerEvent.Connect((sender, { arg, players }) => {
+			this.event.OnServerEvent.Connect((sender, payload) => {
+				if (!acceptRemote(sender, payload) || !typeIs(payload, "table")) return;
+				const { arg, players } = payload;
+				if (!validRequest(this.event.Name, arg)) return;
+				if (!typeIs(players, "table") || players.size() > Players.GetPlayers().size()) return;
 				for (const player of players) {
-					if (player === sender) continue;
+					if (
+						!typeIs(player, "Instance") ||
+						!player.IsA("Player") ||
+						player.Parent !== Players ||
+						player === sender
+					)
+						continue;
 					this.event.FireClient(player, arg);
 				}
 			});
@@ -445,6 +466,8 @@ export class A2SRemoteEvent<TArg = undefined> extends PERemoteEvent<CustomRemote
 
 		if (RunService.IsServer()) {
 			this.event.OnServerEvent.Connect((player, arg) => {
+				if (!this.acceptsPlayer(player) || !acceptRemote(player, arg) || !validRequest(this.event.Name, arg))
+					return;
 				this._invoked.Fire(player, arg);
 			});
 		}
@@ -476,7 +499,11 @@ export class A2OCRemoteEvent<TArg = undefined> extends PERemoteEvent<
 		super(name, eventType);
 
 		if (RunService.IsServer()) {
-			this.event.OnServerEvent.Connect((sender, { arg, target }) => {
+			this.event.OnServerEvent.Connect((sender, payload) => {
+				if (!acceptRemote(sender, payload) || !typeIs(payload, "table")) return;
+				const { arg, target } = payload;
+				if (!validRequest(this.event.Name, arg)) return;
+				if (!typeIs(target, "Instance") || !target.IsA("Player") || target.Parent !== Players) return;
 				this.event.FireClient(target, { sender, arg });
 			});
 		} else if (RunService.IsClient()) {

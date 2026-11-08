@@ -17,10 +17,16 @@ export namespace ServerPartUtils {
 		});
 	}
 
-	export function switchDescendantsNetworkOwner(model: Instance, owner: Player | undefined) {
+	export function switchDescendantsNetworkOwner(
+		model: Instance,
+		owner: Player | undefined,
+		assigned = new Set<BasePart>(),
+	) {
 		PartUtils.applyToAllDescendantsOfType("BasePart", model, (part) => {
-			if (!part.CanSetNetworkOwnership()[0]) return;
-			part.SetNetworkOwner(owner);
+			const root = part.AssemblyRootPart ?? part;
+			if (assigned.has(root) || !root.CanSetNetworkOwnership()[0]) return;
+			assigned.add(root);
+			root.SetNetworkOwner(owner);
 		});
 	}
 

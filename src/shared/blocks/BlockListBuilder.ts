@@ -2,6 +2,7 @@ import { RunService } from "@rbxts/services";
 import { C2S2CRemoteFunction } from "engine/shared/event/PERemoteEvent";
 import { BlockAssertions } from "shared/blocks/BlockAssertions";
 import { TagUtils } from "shared/utils/TagUtils";
+import { prepareWeaponMarkers } from "shared/weaponProjectiles/WeaponMarkers";
 import type { BlockBuilder } from "shared/blocks/Block";
 
 export namespace BlockListBuilder {
@@ -74,6 +75,7 @@ export namespace BlockListBuilder {
 						model.PrimaryPart = cb;
 					}
 
+					if (b.weaponConfig) prepareWeaponMarkers(model);
 					// colbox collision autofix
 					const cb = model.PrimaryPart;
 					if (cb?.Name.fullLower() === "colbox") {

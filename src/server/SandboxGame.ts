@@ -10,6 +10,7 @@ import { PlayerDatabase } from "server/database/PlayerDatabase";
 import { SlotDatabase } from "server/database/SlotDatabase";
 import { PlayModeController as PlayModeController } from "server/modes/PlayModeController";
 import { UnreliableRemoteController } from "server/network/event/UnreliableRemoteHandler";
+import { WeaponController } from "server/network/WeaponController";
 import { ServerPlots } from "server/plots/ServerPlots";
 import { RagdollController } from "server/RagdollController";
 import { ServerEffectCreator } from "server/ServerEffectCreator";
@@ -20,6 +21,7 @@ import { SharedPlots } from "shared/building/SharedPlots";
 import { GameDefinitions } from "shared/data/GameDefinitions";
 import { RemoteEvents } from "shared/RemoteEvents";
 import { CreateSandboxBlocks } from "shared/SandboxBlocks";
+import { WeaponModuleSystem } from "shared/weaponProjectiles/WeaponModuleSystem";
 import type { GameHostBuilder } from "engine/shared/GameHostBuilder";
 import type { EffectCreator } from "shared/effects/EffectBase";
 
@@ -84,6 +86,8 @@ export namespace SandboxGame {
 		PlayModeController.initialize(builder);
 		builder.services.registerService(ServerBlockLogicController);
 		builder.services.registerService(UnreliableRemoteController);
+		builder.services.registerService(WeaponModuleSystem);
+		builder.services.registerService(WeaponController);
 		builder.services.registerService(RagdollController);
 		builder.services.registerService(AchievementController);
 		builder.services.registerService(BadgeController);

@@ -82,7 +82,7 @@ export class ImpactController extends Component {
 		const block = part.Parent as BlockModel;
 		if (!block) return;
 
-		part.Touched.Connect((hit: BasePart | Terrain) => {
+		this.event.subscribe(part.Touched, (hit: BasePart | Terrain) => {
 			// Optimization (do nothing for non-connected blocks)
 			if (part.AssemblyMass === part.Mass) {
 				// I kinda see a flaw in that logic but alright
@@ -94,10 +94,8 @@ export class ImpactController extends Component {
 			if (!hit.CanCollide) return;
 
 			// Compute magnitudes
-			const partSpeed = part.AssemblyLinearVelocity.Magnitude + part.AssemblyAngularVelocity.Magnitude;
-			const secondPartSpeed = hit.AssemblyLinearVelocity.Magnitude + hit.AssemblyAngularVelocity.Magnitude;
-
-			const speedDiff = math.abs(partSpeed - secondPartSpeed);
+			const point = part.Position;
+			const speedDiff = part.GetVelocityAtPosition(point).sub(hit.GetVelocityAtPosition(point)).Magnitude;
 
 			this.blockDamageController.applyDamage(block, {
 				impactDamage: speedDiff,

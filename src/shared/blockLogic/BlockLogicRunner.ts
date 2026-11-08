@@ -43,6 +43,7 @@ export class BlockLogicRunner extends Component {
 
 	startTicking() {
 		this.stopTicking();
+		this.lastTickTime = os.clock();
 		this._isRunning.set(true);
 		this.tickingLoop = this.event.loop(0, () => this.tick());
 	}

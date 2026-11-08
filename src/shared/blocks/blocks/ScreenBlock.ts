@@ -4,6 +4,7 @@ import { t } from "engine/shared/t";
 import { InstanceBlockLogic as InstanceBlockLogic } from "shared/blockLogic/BlockLogic";
 import { BlockLogicTypes } from "shared/blockLogic/BlockLogicTypes";
 import { BlockSynchronizer } from "shared/blockLogic/BlockSynchronizer";
+import { Matrix3Text } from "shared/blockLogic/Matrix3Text";
 import { BlockConfigDefinitions } from "shared/blocks/BlockConfigDefinitions";
 import { BlockCreation } from "shared/blocks/BlockCreation";
 import { BlockManager } from "shared/building/BlockManager";
@@ -70,6 +71,7 @@ const events = {
 events.update.sendBackToOwner = true;
 
 export const dataToString = (data: t.Infer<typeof updateEventType.props.data>): string => {
+	if (Matrix3Text.isMatrix(data)) return Matrix3Text.format(data);
 	if (typeIs(data, "string")) {
 		return data;
 	}

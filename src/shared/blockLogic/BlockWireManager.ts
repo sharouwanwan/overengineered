@@ -18,6 +18,7 @@ export namespace BlockWireManager {
 	};
 
 	export const types: { readonly [k in DataType]: { readonly color: Color3 } } = {
+		matrix3: { color: Color3.fromRGB(85, 215, 185) },
 		bool: { color: Color3.fromRGB(252, 252, 105) },
 		vector3: { color: Color3.fromRGB(244, 142, 255) },
 		number: { color: Color3.fromRGB(48, 173, 85) },

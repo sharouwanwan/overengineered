@@ -47,34 +47,7 @@ export class RideMode extends PlayMode {
 			this.currentMachine = undefined;
 		});
 
-		const alignPositionInstance = new Instance("AlignPosition");
-		alignPositionInstance.Name = "_AlignPosition";
-		alignPositionInstance.Mode = Enum.PositionAlignmentMode.OneAttachment;
-		alignPositionInstance.MaxForce = math.huge;
-		alignPositionInstance.MaxVelocity = math.huge;
-		alignPositionInstance.Responsiveness = 200;
-
-		const alignOrientationInstance = new Instance("AlignOrientation");
-		alignOrientationInstance.Name = "_AlignOrientation";
-		alignOrientationInstance.Mode = Enum.OrientationAlignmentMode.OneAttachment;
-		alignOrientationInstance.MaxAngularVelocity = math.huge;
-		alignOrientationInstance.MaxTorque = math.huge;
-		alignOrientationInstance.Responsiveness = 200;
-
-		CustomRemotes.physics.normalizeRootparts.invoked.Connect((data) => {
-			for (const part of data.parts) {
-				const attachment = new Instance("Attachment", part);
-
-				const alignPosition = alignPositionInstance.Clone();
-				const alignOrientation = alignOrientationInstance.Clone();
-
-				alignPosition.Attachment0 = attachment;
-				alignOrientation.Attachment0 = attachment;
-
-				alignPosition.Parent = part;
-				alignOrientation.Parent = part;
-			}
-		});
+		// Assembly physics is replicated by Roblox, without local corrective forces.
 	}
 
 	static denormalizeRootparts(block: BlockModel): void {

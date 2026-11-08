@@ -60,7 +60,7 @@ export namespace TestFramework {
 			return result;
 		} catch (err) {
 			$err(tostring(err ?? "Unknown error"));
-			return undefined;
+			throw err;
 		} finally {
 			Logger.endScope();
 		}

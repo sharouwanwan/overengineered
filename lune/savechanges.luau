@@ -19,7 +19,7 @@ local CONFIG = {
 	Debug = true,
 
 	-- Path to the structure manifest file
-	ManifestPath = "./lune/structure.json",
+	ManifestPath = require("@lune/process").args[1] or "./lune/structure.json",
 
 	-- Path to the input .rbxl file from which models will be extracted
 	InputPath = "place.rbxl",
@@ -226,3 +226,7 @@ else
 	log(`\n{shared.colors.RED}Extraction failed due to critical errors.`)
 end
 log("--- End of Extraction Summary ---")
+
+if not extractionSuccessful or #criticalErrors > 0 or #missingInstances > 0 then
+	require("@lune/process").exit(1)
+end

@@ -298,7 +298,7 @@ for _, model in pairs(hydrants) do
 		if not isApplyingForce then return end
 
 		local hydrantPosition = effect.Position
-		local objectsInWorkspace = workspace:GetDescendants()
+		local objectsInWorkspace = workspace:GetPartBoundsInRadius(hydrantPosition, waterForceRadius)
 
 		for _, object in pairs(objectsInWorkspace) do
 			if object:IsA("BasePart") and not object.Anchored then

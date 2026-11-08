@@ -69,6 +69,7 @@ export class ChunkLoader<T = defined> extends Component {
 			if (!Workspace.CurrentCamera) continue;
 
 			if (this.isTooHigh()) {
+				this.radiusLoaded = 0;
 				for (const [x, c] of pairs(this.loadedChunks)) {
 					for (const [y] of pairs(c)) {
 						this.unloadChunk(x, y);
@@ -79,7 +80,7 @@ export class ChunkLoader<T = defined> extends Component {
 
 				do {
 					task.wait();
-				} while (this.isTooHigh());
+				} while (!this.isDestroyed() && this.isEnabled() && this.isTooHigh());
 
 				continue;
 			}

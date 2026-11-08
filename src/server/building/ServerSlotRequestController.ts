@@ -1,10 +1,10 @@
 import { Component } from "engine/shared/component/Component";
 import { BlocksSerializer } from "shared/building/BlocksSerializer";
+import { BuildingPlot } from "shared/building/BuildingPlot";
 import { SlotsMeta } from "shared/SlotsMeta";
 import type { PlayerDatabase } from "server/database/PlayerDatabase";
 import type { SlotDatabase } from "server/database/SlotDatabase";
 import type { PlayerId } from "server/PlayerId";
-import type { BuildingPlot } from "shared/building/BuildingPlot";
 import type { PlayerDataStorageRemotesSlots } from "shared/remotes/PlayerDataRemotes";
 
 export interface SlotHistoryLoader {
@@ -99,13 +99,28 @@ export class ServerSlotRequestController extends Component {
 		const start = os.clock();
 		const blocks = this.slots.getBlocks(userid, index);
 
+		const staging = new Instance("Folder");
+		try {
+			const plot = new BuildingPlot(staging, this.blocks.origin, this.blocks.boundingBox, this.blockList);
+			BlocksSerializer.deserializeFromObject(blocks, plot, this.blockList);
+		} finally {
+			staging.Destroy();
+		}
+		const backup = BlocksSerializer.serializeToObject(this.blocks);
 		this.blocks.deleteOperation.execute("all");
 		if (blocks.blocks.size() === 0) {
 			return { success: true, isEmpty: true };
 		}
 
 		$log(`Loading ${userid}'s slot ${index}`);
-		const dblocks = BlocksSerializer.deserializeFromObject(blocks, this.blocks, this.blockList);
+		let dblocks: number;
+		try {
+			dblocks = BlocksSerializer.deserializeFromObject(blocks, this.blocks, this.blockList);
+		} catch (err) {
+			this.blocks.deleteOperation.execute("all");
+			BlocksSerializer.deserializeFromObject(backup, this.blocks, this.blockList);
+			throw err;
+		}
 		$log(`Loaded ${userid} slot ${index} in ${os.clock() - start}`);
 
 		return { success: true, isEmpty: dblocks === 0 };

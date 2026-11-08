@@ -6,9 +6,12 @@ import type { BlockLogicArgs, BlockLogicFullBothDefinitions } from "shared/block
 import type { BlockBuilder } from "shared/blocks/Block";
 
 const definition = {
-	outputOrder: ["position", "angle", "direction", "angle3d", "position3d"],
+	outputOrder: ["position", "angle", "direction", "angle3d", "position3d", "leftClick", "middleClick", "rightClick"],
 	input: {},
 	output: {
+		leftClick: { displayName: "Left Click", types: ["bool"] },
+		middleClick: { displayName: "Middle Click", types: ["bool"] },
+		rightClick: { displayName: "Right Click", types: ["bool"] },
 		position: {
 			displayName: "Position",
 			unit: "Vector2 0-1",
@@ -43,6 +46,23 @@ class Logic extends BlockLogic<typeof definition> {
 		super(definition, block);
 
 		let wheel = 0;
+		const setButton = (input: InputObject, pressed: boolean) => {
+			if (input.UserInputType === Enum.UserInputType.MouseButton1) this.output.leftClick.set("bool", pressed);
+			if (input.UserInputType === Enum.UserInputType.MouseButton2) this.output.rightClick.set("bool", pressed);
+			if (input.UserInputType === Enum.UserInputType.MouseButton3) this.output.middleClick.set("bool", pressed);
+		};
+		const release = () => {
+			this.output.leftClick.set("bool", false);
+			this.output.middleClick.set("bool", false);
+			this.output.rightClick.set("bool", false);
+		};
+		this.event.subscribe(UserInputService.InputBegan, (input, processed) => {
+			if (!processed && !UserInputService.GetFocusedTextBox()) setButton(input, true);
+		});
+		this.event.subscribe(UserInputService.InputEnded, (input) => setButton(input, false));
+		this.event.subscribe(UserInputService.WindowFocusReleased, release);
+		this.onDisable(release);
+		this.onEnable(release);
 
 		if (RunService.IsClient()) {
 			this.event.subscribe(UserInputService.InputChanged, (input) => {

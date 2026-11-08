@@ -7,7 +7,10 @@
 		"build": "rbxtsc",
 		"watch": "rbxtsc -w",
 		"rojo": "rojo serve default.project.json",
-		"dev": "node ./scripts/watch-all.js"
+		"dev": "node ./scripts/watch-all.js",
+		"test": "node scripts/regression-tests.js",
+		"benchmark": "node scripts/benchmark.js",
+		"verify:assets": "node scripts/save-assets.js --verify-only"
 	},
 	"keywords": [],
 	"author": "anywaymachines",

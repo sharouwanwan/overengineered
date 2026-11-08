@@ -1,4 +1,4 @@
-import { RunService, Workspace } from "@rbxts/services";
+import { RunService } from "@rbxts/services";
 import { InstanceBlockLogic } from "shared/blockLogic/BlockLogic";
 import { BlockCreation } from "shared/blocks/BlockCreation";
 import { GameDefinitions } from "shared/data/GameDefinitions";
@@ -49,17 +49,18 @@ class Logic extends InstanceBlockLogic<typeof definition, WingBlock> {
 
 		const fluidForcesEnabled = !playerData?.config.get().physics.simplified_aerodynamics;
 		if (fluidForcesEnabled) {
-			this.instance.WingSurface.EnableFluidForces = true;
+			const wingEnabled = this.initializeInputCache("enabled");
+			this.onEnable(() => {
+				this.instance.WingSurface.EnableFluidForces = wingEnabled.tryGet() ?? false;
+			});
+			this.onk(["enabled"], ({ enabled }) => (this.instance.WingSurface.EnableFluidForces = enabled));
+			this.onDisable(() => (this.instance.WingSurface.EnableFluidForces = false));
 			return;
 		}
 
-		this.onkFirstInputs(["enabled"], ({ enabled }) => {
-			if (!enabled) {
-				this.instance.WingSurface.EnableFluidForces = false;
-				this.disable();
-				return;
-			}
-
+		const enabled = this.initializeInputCache("enabled");
+		this.instance.WingSurface.EnableFluidForces = false;
+		this.onkFirstInputs(["enabled"], () => {
 			// Create force constraints
 			const attachment = new Instance("Attachment", this.instance.WingSurface);
 			const vectorForce = new Instance("VectorForce", this.instance.WingSurface);
@@ -86,8 +87,18 @@ class Logic extends InstanceBlockLogic<typeof definition, WingBlock> {
 				effectiveSurface = new Vector3(thickness, wingArea, thickness);
 			}
 
-			this.event.subscribe(RunService.Heartbeat, () => {
-				if (!this.instance.FindFirstChild("WingSurface")) {
+			this.onDisable(() => {
+				vectorForce.Force = Vector3.zero;
+				vectorForce.Enabled = false;
+			});
+			this.onDestroy(() => {
+				vectorForce.Destroy();
+				attachment.Destroy();
+			});
+			this.event.subscribe(RunService.PreSimulation, (dt) => {
+				if (!enabled.tryGet() || !this.instance.FindFirstChild("WingSurface")) {
+					vectorForce.Enabled = false;
+					vectorForce.Force = Vector3.zero;
 					return;
 				}
 
@@ -138,7 +149,7 @@ class Logic extends InstanceBlockLogic<typeof definition, WingBlock> {
 				const scaledLiftForce = liftForce.mul(speedFactor);
 
 				// Step 8: Average with previous force for stability
-				const averagedForce = scaledLiftForce.add(vectorForce.Force).div(2);
+				const blend = 1 - math.exp(-math.max(0, dt) / 0.024);
 
 				// Step 9: Apply height factor (air density decreases with altitude)
 				const heightFactor = math.clamp(
@@ -152,9 +163,10 @@ class Logic extends InstanceBlockLogic<typeof definition, WingBlock> {
 				);
 
 				// Step 10: Apply final force
-				const finalForce = averagedForce.mul(heightFactor);
+				const desiredForce = scaledLiftForce.mul(heightFactor);
+				const finalForce = vectorForce.Force.Lerp(desiredForce, blend);
 
-				vectorForce.Enabled = finalForce.Magnitude > Workspace.Gravity * wing.Mass;
+				vectorForce.Enabled = true;
 				vectorForce.Force = finalForce;
 			});
 		});

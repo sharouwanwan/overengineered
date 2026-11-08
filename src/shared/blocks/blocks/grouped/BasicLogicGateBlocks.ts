@@ -19,6 +19,7 @@ import type {
 } from "shared/blockLogic/BlockLogic";
 import type { BlockLogicTypes } from "shared/blockLogic/BlockLogicTypes";
 import type { LogicValueStorageContainer } from "shared/blockLogic/BlockLogicValueStorage";
+import type { Matrix3 } from "shared/blockLogic/Matrix3";
 import type { BlockBuilder, BlockCategoryPath, BlockModelSource } from "shared/blocks/Block";
 
 const autoModel = (prefab: BlockCreation.Model.PrefabName, text: string, category: BlockCategoryPath) => {
@@ -874,7 +875,7 @@ namespace ShiftRegisterOutput {
 		constructor(block: InstanceBlockLogicArgs) {
 			super(definition, block);
 
-			const values: (string | number | boolean | Vector3 | Color3 | BlockLogicTypes.SoundValue)[] = [];
+			const values: (string | number | boolean | Vector3 | Color3 | Matrix3 | BlockLogicTypes.SoundValue)[] = [];
 
 			const shift = this.initializeInputCache("shift");
 			const lockOutput = this.initializeInputCache("lockOutput");
@@ -975,7 +976,7 @@ namespace ShiftRegisterInput {
 			super(definition, block);
 
 			type t = BlockLogicTypes.IdListOfType<typeof BlockConfigDefinitions.any> | undefined;
-			type t2 = string | number | boolean | Vector3 | Color3 | BlockLogicTypes.SoundValue;
+			type t2 = string | number | boolean | Vector3 | Color3 | Matrix3 | BlockLogicTypes.SoundValue;
 			// init values here
 
 			const filler = {};

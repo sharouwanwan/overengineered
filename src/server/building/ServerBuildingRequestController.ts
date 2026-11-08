@@ -2,7 +2,6 @@ import { RunService } from "@rbxts/services";
 import { Component } from "engine/shared/component/Component";
 import { Objects } from "engine/shared/fixes/Objects";
 import { PlayerRank } from "engine/shared/PlayerRank";
-import { BlockManager } from "shared/building/BlockManager";
 import { BuildingManager } from "shared/building/BuildingManager";
 import type { PlayerDatabase } from "server/database/PlayerDatabase";
 import type { PlayerId } from "server/PlayerId";
@@ -116,7 +115,7 @@ export class ServerBuildingRequestController extends Component {
 				return err("Unknown block id");
 			}
 
-			const placed = bplot.getBlocks().count((placed_block) => BlockManager.manager.id.get(placed_block) === id);
+			const placed = bplot.getBlockCount(id);
 
 			if (placed + count > regblock.limit && (game.PrivateServerOwnerId === 0 || regblock.limit === 1)) {
 				return err(

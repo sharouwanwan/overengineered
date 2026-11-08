@@ -1,4 +1,5 @@
 import { HttpService } from "@rbxts/services";
+import { validPayload } from "engine/shared/event/RemoteValidation";
 import { ArgsSignal } from "engine/shared/event/Signal";
 import { BB } from "engine/shared/fixes/BB";
 import { JSON } from "engine/shared/fixes/Json";
@@ -14,6 +15,11 @@ const success: SuccessResponse = { success: true };
 /** Building on a plot. */
 @injectable
 export class BuildingPlot extends ReadonlyPlot {
+	private readonly blockCounts = new Map<BlockId, number>();
+	private readonly blockIds = new Map<Instance, BlockId>();
+	getBlockCount(id: BlockId): number {
+		return this.blockCounts.get(id) ?? 0;
+	}
 	readonly multiPlaceOperation = new Operation(this.multiPlace.bind(this));
 	readonly placeOperation = new Operation(this.place.bind(this));
 	readonly deleteOperation = new Operation(this.delete.bind(this));
@@ -35,6 +41,20 @@ export class BuildingPlot extends ReadonlyPlot {
 		@inject private readonly blockList: BlockList,
 	) {
 		super(instance, origin, boundingBox);
+		const add = (child: Instance) => {
+			if (!child.IsA("Model") || this.blockIds.has(child)) return;
+			const id = BlockManager.manager.id.get(child as BlockModel);
+			this.blockIds.set(child, id);
+			this.blockCounts.set(id, this.getBlockCount(id) + 1);
+		};
+		for (const child of instance.GetChildren()) add(child);
+		instance.ChildAdded.Connect(add);
+		instance.ChildRemoved.Connect((child) => {
+			const id = this.blockIds.get(child);
+			if (id === undefined) return;
+			this.blockIds.delete(child);
+			this.blockCounts.set(id, math.max(0, this.getBlockCount(id) - 1));
+		});
 	}
 
 	initializeTimeBasedDelay() {
@@ -107,8 +127,8 @@ export class BuildingPlot extends ReadonlyPlot {
 			return { success: false, message: `Unknown block id ${data.id}` };
 		}
 
-		const placed = this.getBlocks().count((placed_block) => BlockManager.manager.id.get(placed_block) === data.id);
-		if (placed > block.limit && (game.PrivateServerOwnerId === 0 || block.limit === 1)) {
+		const placed = this.getBlockCount(data.id);
+		if (placed >= block.limit && (game.PrivateServerOwnerId === 0 || block.limit === 1)) {
 			return err(
 				`Type limit exceeded for ${data.id}.${block.limit !== 1 ? " Maybe you should play on a private server?" : ""}`,
 			);
@@ -141,6 +161,8 @@ export class BuildingPlot extends ReadonlyPlot {
 		model.Name = uuid;
 
 		SharedBuilding.paint([model], data.color, data.material, true);
+		this.blockIds.set(model, data.id);
+		this.blockCounts.set(data.id, this.getBlockCount(data.id) + 1);
 		model.Parent = this.instance;
 
 		// scaling has to be updated after parenting so the weld offset is updated
@@ -159,6 +181,11 @@ export class BuildingPlot extends ReadonlyPlot {
 		if (blocks === "all") {
 			blocks = this.getBlocks();
 			for (const block of blocks) {
+				const id = this.blockIds.get(block);
+				if (id !== undefined) {
+					this.blockIds.delete(block);
+					this.blockCounts.set(id, math.max(0, this.getBlockCount(id) - 1));
+				}
 				block.Destroy();
 				this._blockDestroyed.Fire(block);
 			}
@@ -177,6 +204,11 @@ export class BuildingPlot extends ReadonlyPlot {
 			}
 
 			for (const block of blocks) {
+				const id = this.blockIds.get(block);
+				if (id !== undefined) {
+					this.blockIds.delete(block);
+					this.blockCounts.set(id, math.max(0, this.getBlockCount(id) - 1));
+				}
 				block.Destroy();
 				this._blockDestroyed.Fire(block);
 			}
@@ -264,14 +296,18 @@ export class BuildingPlot extends ReadonlyPlot {
 	}
 	updateConfig(configs: ConfigUpdateRequest["configs"]): Response {
 		for (const config of configs) {
-			BlockManager.manager.config.set(config.block, JSON.deserialize(config.scfg));
+			const decoded = JSON.deserialize(config.scfg);
+			if (!typeIs(decoded, "table") || !validPayload(decoded)) return err("Invalid configuration");
+			BlockManager.manager.config.set(config.block, decoded as PlacedBlockData["config"]);
 		}
 
 		return success;
 	}
 	updateCustomData(datas: CustomDataUpdateRequest["datas"]): Response {
 		for (const data of datas) {
-			BlockManager.manager.customData.set(data.block, JSON.deserialize(data.sdata));
+			const decoded = JSON.deserialize(data.sdata);
+			if (!typeIs(decoded, "table") || !validPayload(decoded)) return err("Invalid custom data");
+			BlockManager.manager.customData.set(data.block, decoded as PlacedBlockData["customData"]);
 		}
 
 		return success;

@@ -1,6 +1,7 @@
 import { t } from "engine/shared/t";
 import type { PlacedBlockConfig } from "shared/blockLogic/BlockConfig";
 import type { BlockLogicFullInputDef } from "shared/blockLogic/BlockLogic";
+import type { Matrix3 } from "shared/blockLogic/Matrix3";
 import type { SoundLogic } from "shared/blockLogic/SoundLogic";
 
 type LEnum<T extends string> = {
@@ -178,6 +179,7 @@ export namespace BlockLogicTypes {
 		readonly string: String;
 		readonly key: Key;
 		readonly vector3: Vec3;
+		readonly matrix3: BCPrimitive<Matrix3>;
 		readonly color: Color;
 		readonly byte: Byte;
 		readonly bytearray: ByteArray;
@@ -207,6 +209,17 @@ export namespace BlockLogicTypes {
 			code: t.string,
 			enum: t.string,
 			vector3: t.vector3,
+			matrix3: t.interface({
+				m11: t.number,
+				m12: t.number,
+				m13: t.number,
+				m21: t.number,
+				m22: t.number,
+				m23: t.number,
+				m31: t.number,
+				m32: t.number,
+				m33: t.number,
+			}),
 			color: t.color,
 			sound: t.interface({
 				id: t.string,

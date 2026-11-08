@@ -133,9 +133,10 @@ const cframe_update = ({ block, rotationSpeed, currentCFrame }: CFrameUpdateData
 		cframe_update_signals.set(
 			weld,
 			RunService.Heartbeat.Connect((deltaTime) => {
-				if (!weld) {
+				if (!weld.Parent) {
 					cframe_update_signals.get(weld)?.Disconnect();
 					cframe_update_signals.delete(weld);
+					return;
 				}
 
 				weld.C0 = weld.C0.mul(CFrame.Angles(-rotationSpeed * deltaTime, 0, 0));
