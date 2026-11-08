@@ -393,7 +393,6 @@ let tntTime = 0,
 	tntConfirmed = false;
 const tntEvents = new Map(),
 	tntRequests = [];
-const fuseModule=load("src/shared/blockLogic/TNTFuse.ts",{},{math:{max:Math.max}});
 const contactSignal = {},
 	heartbeatSignal = {},
 	confirmationSignal = {};
@@ -407,9 +406,9 @@ class TestLogic {
 		this.event = { subscribe: (signal, fn) => tntEvents.set(signal, fn) };
 	}
 	initializeInputCache(key) {
-		const get=()=>({radius:12,pressure:2500,flammable:true,impact:true,armed:true,armingDelay:0,fuseTime:0,proximity:0})[key];return {get,tryGet:get};
+		const get=()=>({radius:12,pressure:2500,flammable:true,impact:true})[key];return {get,tryGet:get};
 	}
-	onAlwaysInputs(fn) {
+	on(fn) {
 		this.inputChanged = fn;
 	}
 	onDisable(fn) {
@@ -440,7 +439,6 @@ const { TNTBlocks } = load(
 			Workspace: { GetServerTimeNow: () => tntTime },
 		},
 		"shared/blockLogic/BlockLogic": { InstanceBlockLogic: TestLogic },
-		"shared/blockLogic/TNTFuse":fuseModule,
 		"shared/building/BlockManager":{BlockManager:{}},
 		"shared/blocks/BlockCreation": { BlockCreation: { arrayFromObject: Object.values } },
 		"shared/RemoteEvents": { RemoteEvents: { Explode: { send: (request) => tntRequests.push(request) } } },
@@ -456,6 +454,8 @@ const { TNTBlocks } = load(
 // A collision aborts server startup before GAME_LOADED can be published.
 for (const block of TNTBlocks) {
 	const { input, output } = block.logic.definition;
+	assert.deepEqual(Object.keys(input).sort(), ["explode", "flammable", "impact", "pressure", "radius"]);
+	assert.equal(Object.keys(output).length, 0);
 	for (const key of Object.keys(output)) {
 		assert.equal(Object.hasOwn(input, key), false, `TNT input/output wire ID collision: ${key}`);
 	}

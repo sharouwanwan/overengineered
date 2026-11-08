@@ -12,7 +12,7 @@ function load(file, modules = {}, globals = {}) {
 		...globals,
 	};
 	const prelude =
-		"Array.prototype.remove=function(i){return this.splice(i,1)[0]}; Array.prototype.clear=function(){this.length=0};";
+		"Array.prototype.remove=function(i){return this.splice(i,1)[0]}; Array.prototype.clear=function(){this.length=0}; Object.defineProperty(Set.prototype,'length',{get(){return this.size}}); Object.defineProperty(Map.prototype,'length',{get(){return this.size}});";
 	vm.runInNewContext(
 		prelude +
 			ts.transpileModule(fs.readFileSync(file, "utf8").replaceAll(".size()", ".length"), {
@@ -97,24 +97,6 @@ for (const text of [
 	assert.equal(Matrix3Text.parse(text), undefined);
 assert.equal(Matrix3Text.format(Matrix3.identity), "[[1, 0, 0], [0, 1, 0], [0, 0, 1]]");
 console.log("Matrix arithmetic, inverse, readable formatting and strict nested-row parsing passed.");
-const { TNTFuse } = load("src/shared/blockLogic/TNTFuse.ts", {}, { math });
-const fuse = new TNTFuse();
-assert.equal(fuse.update(0, true, 2), false);
-assert.equal(fuse.update(2, true, 2), true);
-fuse.trigger(2, 3);
-fuse.trigger(3, 9);
-assert.equal(fuse.remaining(4), 1);
-assert.equal(fuse.due(4), false);
-assert.equal(fuse.due(5), true);
-fuse.update(4, false, 2);
-assert.equal(fuse.triggered(), false);
-assert.equal(fuse.update(5, true, 2), false);
-assert.equal(fuse.update(7, true, 2), true);
-fuse.trigger(7, 0);
-assert.equal(fuse.due(7), true);
-fuse.confirm();
-assert.equal(fuse.due(8), false);
-console.log("TNT arming delay, latched countdown, disarm cancellation and confirmation passed.");
 const { NumericalFilter } = load("src/shared/blockLogic/NumericalFilter.ts", {}, { math });
 const filter1 = new NumericalFilter(),
 	filter2 = new NumericalFilter();
@@ -255,7 +237,7 @@ const { WeaponController } = load(
 	},
 	{ math, Vector3: Vec, RaycastParams: class {}, injectable: (c) => c, inject: () => {} },
 );
-new WeaponController({ getPlayerMode: () => "ride" });
+new WeaponController({ getPlayerMode: () => "ride" }, { flush() {} });
 const shoot = () => events.get(fire)(player, { core, color: {}, reload: false, baseDamage: 999999 });
 admin = false;
 shoot();
@@ -349,3 +331,327 @@ Object.assign(memory.inputs, { reset: false, set: false });
 memory.tick();
 assert.equal(memory.result.value, 30);
 console.log("Memory initializes without Value, preserves its stored value and gives Reset precedence.");
+
+// Exercise the actual assembly service, including the folder replacement that
+// happens on plot claim. Do not pre-populate its registry or calculated outputs.
+class TestSignal {
+	listeners = new Set();
+	Connect(fn) {
+		this.listeners.add(fn);
+		return { Disconnect: () => this.listeners.delete(fn) };
+	}
+	Fire(...args) {
+		for (const fn of [...this.listeners]) fn(...args);
+	}
+}
+class AssemblyHost {
+	constructor() {
+		this.event = { subscribe: (signal, fn) => signal.Connect(fn) };
+		this.enableCallbacks = [];
+	}
+	onEnable(fn) {
+		this.enableCallbacks.push(fn);
+	}
+	onDestroy(fn) {
+		this.dispose = fn;
+	}
+}
+const assemblyFrame = {
+	Position: Vec.zero,
+	RightVector: new Vec(1, 0, 0),
+	UpVector: new Vec(0, 1, 0),
+	ToObjectSpace(frame) {
+		return frame;
+	},
+	mul(frame) {
+		return frame;
+	},
+};
+function testFolder(name = "Blocks") {
+	return {
+		Name: name,
+		children: [],
+		ChildAdded: new TestSignal(),
+		ChildRemoved: new TestSignal(),
+		IsA: (t) => t === "Folder",
+		GetChildren() {
+			return this.children;
+		},
+		add(child) {
+			child.Parent = this;
+			this.children.push(child);
+			this.ChildAdded.Fire(child);
+		},
+		remove(child) {
+			this.children.splice(this.children.indexOf(child), 1);
+			child.Parent = undefined;
+			this.ChildRemoved.Fire(child);
+		},
+	};
+}
+function testWeapon(id, uuid = id, markers = ["output1"]) {
+	const props = new Map(),
+		attrs = new Map();
+	const signal = (map, key) => {
+		if (!map.has(key)) map.set(key, new TestSignal());
+		return map.get(key);
+	};
+	const model = {
+		Name: uuid,
+		IsA: (t) => t === "Model",
+		GetAttribute: () => undefined,
+		GetAttributeChangedSignal: (k) => signal(attrs, k),
+		GetPivot: () => assemblyFrame,
+	};
+	model.PrimaryPart = { Anchored: true, GetPropertyChangedSignal: (k) => signal(props, k), model };
+	const markerParts = markers.map((Name) => ({
+		Name,
+		IsA: (t) => t === "BasePart",
+		CFrame: assemblyFrame,
+		Position: Vec.zero,
+		GetPivot: () => assemblyFrame,
+	}));
+	model.FindFirstChild = (n) => (n === "moduleMarkers" ? { GetChildren: () => markerParts } : undefined);
+	model.data = { id, uuid, instance: model };
+	model.markers = markerParts;
+	return model;
+}
+const plot = testFolder("Plot"),
+	assemblyHeartbeat = new TestSignal(),
+	touches = new Map();
+const config = {
+	mgloader: {
+		id: "mgloader",
+		weaponConfig: {
+			type: "CORE",
+			modifier: {},
+			markers: { output1: { emitsProjectiles: true, allowedBlockIds: ["barrel"] } },
+		},
+	},
+	barrel: {
+		id: "barrel",
+		weaponConfig: {
+			type: "PROCESSOR",
+			modifier: {},
+			markers: { output1: { emitsProjectiles: true, allowedBlockIds: ["barrel"] } },
+		},
+	},
+};
+const { WeaponModule, WeaponModuleSystem } = load(
+	"src/shared/weaponProjectiles/WeaponModuleSystem.ts",
+	{
+		"@rbxts/services": {
+			RunService: { IsServer: () => true, Heartbeat: assemblyHeartbeat },
+			Workspace: {
+				GetPartsInPart: (marker, params) => {
+					return (touches.get(marker) ?? []).filter((p) =>
+						params.FilterDescendantsInstances.includes(p.model),
+					);
+				},
+			},
+		},
+		"engine/shared/di/HostedService": { HostedService: AssemblyHost },
+		"shared/building/BlockManager": {
+			BlockManager: { getBlockDataByBlockModel: (m) => m.data, getBlockDataByPart: (p) => p.model.data },
+		},
+		"shared/weaponProjectiles/WeaponMarkers": { prepareWeaponMarkers() {} },
+	},
+	{
+		pairs: (v) => (typeof v.entries === "function" ? v.entries() : Object.entries(v)),
+		math: { ...math, cos: Math.cos, rad: (x) => (x * Math.PI) / 180 },
+		os: { clock: () => now },
+		OverlapParams: class {},
+		Enum: { RaycastFilterType: { Include: 1 } },
+		injectable: (c) => c,
+		inject: () => {},
+	},
+);
+const assemblyService = new WeaponModuleSystem({ blocks: config }, { plots: [{ instance: plot }] });
+assemblyService.enableCallbacks.forEach((fn) => fn());
+const firstFolder = testFolder();
+plot.add(firstFolder);
+const firstGun = testWeapon("mgloader");
+firstFolder.add(firstGun);
+assemblyService.flush(firstFolder);
+assert.equal(WeaponModule.allModules.mgloader.instance, firstGun);
+assert.equal(WeaponModule.allModules.mgloader.parentCollection.calculatedOutputs.length, 1);
+const barrel = testWeapon("barrel");
+firstFolder.add(barrel);
+touches.set(firstGun.markers[0], [barrel.PrimaryPart]);
+assemblyService.flush(firstFolder);
+assert.equal(WeaponModule.allModules.mgloader.parentCollection.calculatedOutputs[0].module.instance, barrel);
+assert.equal(WeaponModule.allModules.mgloader.parentCollection.calculatedOutputs[0].source.instance, firstGun);
+firstFolder.remove(barrel);
+assemblyService.flush(firstFolder);
+assert.equal(WeaponModule.allModules.barrel, undefined);
+assert.equal(WeaponModule.allModules.mgloader.parentCollection.calculatedOutputs[0].module.instance, firstGun);
+// Reload a build with the same saved UUID in a new model and folder.
+plot.remove(firstFolder);
+assert.equal(WeaponModule.allModules.mgloader, undefined);
+assert.equal(firstFolder.ChildAdded.listeners.size, 0);
+const replacement = testFolder(),
+	secondGun = testWeapon("mgloader");
+replacement.add(secondGun);
+plot.add(replacement);
+assemblyService.flush(replacement);
+assert.equal(WeaponModule.allModules.mgloader.instance, secondGun);
+// Send a real firing request through the registry built above, rather than a
+// hand-written muzzle list. This joins the lifecycle and server firing tests.
+secondGun.PrimaryPart.Anchored = false;
+secondGun.PrimaryPart.AssemblyLinearVelocity = Vec.zero;
+secondGun.Destroying = { Once() {} };
+secondGun.SetAttribute = () => {};
+const { WeaponController: IntegratedController } = load(
+	"src/server/network/WeaponController.ts",
+	{
+		"@rbxts/services": {
+			Players,
+			RunService: { Heartbeat: heartbeat },
+			Workspace: { Gravity: 0, GetServerTimeNow: () => now, Raycast: () => undefined },
+		},
+		"engine/shared/di/HostedService": { HostedService },
+		"engine/shared/PlayerRank": { PlayerRank: { isAdmin: () => true } },
+		"server/blocks/ServerBlockLogic": { ServerBlockLogic: { staticIsValidBlock: () => true } },
+		"server/network/CombatDamage": { CombatDamage: { apply() {}, blast() {} } },
+		"shared/building/BlockManager": { BlockManager: { getBlockDataByPart: (part) => part.model.data } },
+		"shared/weaponProjectiles/WeaponModuleSystem": { WeaponModule },
+		"shared/weaponProjectiles/WeaponProtocol": { WeaponProtocol: protocol, weaponProfiles: profiles },
+	},
+	{ math, Vector3: Vec, RaycastParams: class {}, injectable: (c) => c, inject: () => {} },
+);
+new IntegratedController({ getPlayerMode: () => "ride" }, assemblyService);
+const beforeIntegratedShot = spawned.length;
+events.get(fire)(player, { core: secondGun, color: {}, reload: false });
+assert.equal(spawned.length, beforeIntegratedShot + 1);
+// Old model removals must never erase a replacement sharing its saved UUID.
+firstFolder.remove(firstGun);
+assert.equal(WeaponModule.allModules.mgloader.instance, secondGun);
+assemblyService.dispose();
+assert.equal(WeaponModule.allModules.mgloader, undefined);
+console.log("Actual weapon assembly: late plots, attached barrels, removal, same-UUID reload and cleanup passed.");
+
+// Actual client input logic: retry early requests, respect server cooldown, and
+// treat Reload as an edge instead of swallowing every shot while it stays high.
+const clientRequests = [],
+	clientAttrs = { id: "mgloader" };
+class WeaponLogicStub {
+	constructor(_, block) {
+		this.instance = block.instance;
+		this.output = Object.fromEntries(["ready", "ammo", "reloading"].map((k) => [k, { set() {} }]));
+	}
+	onAlwaysInputs(fn) {
+		this.tick = fn;
+	}
+}
+const { ModularWeaponLogic } = load("src/shared/weaponProjectiles/ModularWeaponLogic.ts", {
+	"@rbxts/services": { Workspace: { GetServerTimeNow: () => now } },
+	"shared/blockLogic/BlockLogic": { InstanceBlockLogic: WeaponLogicStub },
+	"shared/blocks/BlockConfigDefinitions": { BlockConfigDefinitions: { bool: {} } },
+	"shared/Colors": { Colors: { pink: {} } },
+	"shared/weaponProjectiles/WeaponProtocol": {
+		WeaponProtocol: { fire: { send: (r) => clientRequests.push(r) } },
+		weaponProfiles: profiles,
+	},
+});
+const clientGun = new ModularWeaponLogic({ instance: { GetAttribute: (k) => clientAttrs[k] } });
+const input = { fireTrigger: true, projectileColor: {}, reload: false };
+now = 20;
+clientGun.tick(input);
+assert.equal(clientRequests.length, 1);
+now = 20.05;
+clientGun.tick(input);
+assert.equal(clientRequests.length, 1);
+now = 20.11;
+clientGun.tick(input);
+assert.equal(clientRequests.length, 2);
+clientAttrs.WeaponReadyAt = 21;
+now = 20.3;
+clientGun.tick(input);
+assert.equal(clientRequests.length, 2);
+now = 21.01;
+clientGun.tick({ ...input, reload: true });
+assert.equal(clientRequests.at(-1).reload, true);
+now = 21.12;
+clientGun.tick({ ...input, reload: true });
+assert.equal(clientRequests.at(-1).reload, false);
+console.log("Actual weapon client: bounded retries, acknowledged cooldown and held Reload passed.");
+
+// Delayed laser packets still get a full visible lifetime after receipt.
+Vec.prototype.div = function (n) {
+	return this.mul(1 / n);
+};
+const visuals = [],
+	effectEvents = new Map(),
+	renderSignal = {},
+	spawnSignal = {},
+	hitSignal = {};
+class EffectHost {
+	constructor() {
+		this.event = { subscribe: (signal, fn) => effectEvents.set(signal, fn) };
+	}
+	onDestroy(fn) {
+		this.dispose = fn;
+	}
+}
+class VisualPart {
+	constructor(kind) {
+		this.kind = kind;
+		visuals.push(this);
+	}
+	Destroy() {
+		this.destroyed = true;
+	}
+}
+const { WeaponEffectsController } = load(
+	"src/client/controller/WeaponEffectsController.ts",
+	{
+		"@rbxts/services": { RunService: { PreRender: renderSignal }, Workspace: { GetServerTimeNow: () => now } },
+		"engine/shared/di/HostedService": { HostedService: EffectHost },
+		"shared/weaponProjectiles/WeaponProtocol": {
+			WeaponProtocol: { spawn: { invoked: spawnSignal }, hit: { invoked: hitSignal } },
+		},
+	},
+	{
+		Instance: VisualPart,
+		Vector3: Vec,
+		CFrame: { lookAt: () => ({}) },
+		Enum: { Material: { Neon: 1 } },
+		math,
+		os: { clock: () => now },
+		injectable: (c) => c,
+	},
+);
+new WeaponEffectsController();
+now = 30;
+effectEvents.get(spawnSignal)({
+	id: 91,
+	position: Vec.zero,
+	endpoint: new Vec(0, 0, 5000),
+	color: {},
+	time: 29,
+	lifetime: 0.1,
+});
+effectEvents.get(renderSignal)();
+const segments = visuals.filter((p) => p.kind === "Part");
+assert.equal(segments.length, 3);
+assert.ok(segments.every((p) => p.Parent && p.Anchored && !p.CanCollide && p.Size.Z <= 2000));
+now = 30.11;
+effectEvents.get(renderSignal)();
+assert.ok(segments.every((p) => !p.Parent));
+console.log("Laser visuals survive delayed delivery, stay anchored, segment long beams and expire cleanly.");
+
+const weaponBlockModules = {
+	"shared/blockLogic/BlockLogic": { InstanceBlockLogic: class {} },
+	"shared/blocks/BlockCreation": { BlockCreation: { defaults: {} } },
+};
+const { MachineGunBarrels } = load(
+	"src/shared/blocks/blocks/Weaponry/Machinegun/MachineGunBarrels.ts",
+	weaponBlockModules,
+);
+for (const size of ["heavy", "medium", "light"]) {
+	const config = MachineGunBarrels.find((b) => b.id === size + "mgbarrel").weaponConfig;
+	assert.ok(config.markers.output1.allowedBlockIds.includes(size + "mgbarrel"));
+	assert.ok(config.markers.output1.allowedBlockIds.includes(size + "muzzlebrake"));
+	assert.equal(config.modifier.speedModifier.isRelative, true);
+}
+console.log("Real machine gun definitions connect matching barrel/muzzle sizes and use relative speed upgrades.");

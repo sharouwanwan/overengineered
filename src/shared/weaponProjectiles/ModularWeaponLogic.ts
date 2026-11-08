@@ -42,9 +42,12 @@ export class ModularWeaponLogic extends InstanceBlockLogic<typeof modularWeaponD
 			this.output.ready.set("bool", now >= readyAt && now >= reloadAt && ammo > 0);
 			this.output.reloading.set("bool", now < reloadAt);
 			this.output.ammo.set("number", ammo);
-			if ((reload && !wasReload) || (fireTrigger && now >= nextRequest)) {
-				WeaponProtocol.fire.send({ core: this.instance, color: projectileColor, reload });
-				nextRequest = now + (profile?.interval ?? 0.1);
+			const reloadPressed = reload && !wasReload;
+			// Retry an unacknowledged shot at a bounded rate. Sending only once per
+			// fire interval dropped every other shot when network jitter arrived early.
+			if (reloadPressed || (fireTrigger && now >= nextRequest && now >= readyAt && now >= reloadAt)) {
+				WeaponProtocol.fire.send({ core: this.instance, color: projectileColor, reload: reloadPressed });
+				nextRequest = now + 0.1;
 			}
 			wasReload = reload;
 		});

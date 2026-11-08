@@ -17,6 +17,10 @@ All modular weapon blocks use devOnly. The existing block picker and placement c
 
 Weapon markers receive named, idempotent welds before placement and before Ride mode. They are hidden during Ride and cannot collide or add aerodynamic forces. Projectiles use bounded server sweeps and anchored client visuals; lasers use server rays. These are a developer preview pending multiplayer and gameplay tuning in Studio.
 
+Assembly discovery runs on the server only and follows replacement Blocks folders when players claim plots or reload builds. Dirty assemblies are batched at 10 Hz and flushed before firing. Queries include only that plot's weapon models; stationary assemblies do not rescan every frame. Machine gun, plasma and laser cores can emit directly; a cannon breech requires a compatible cannon base. Attach matching, aligned barrels to extend a weapon. F is the default fire key in Ride mode.
+
+TNT uses its original Explode, Explosion radius, Explosion pressure, Flammable and Impact controls. Arming, timer, proximity and fuse outputs were removed. Swept impacts, bounded retries, server confirmation, capped blast forces and fire optimizations remain.
+
 ## Logic conventions
 
 - Matrix3 is a distinct row-major 3x3 type. Matrix x Vector multiplies a column vector. Input/display syntax: [[1,0,0],[0,1,0],[0,0,1]]. Singular inverse returns zero with Valid=false.

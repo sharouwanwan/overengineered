@@ -9,7 +9,7 @@ export class WeaponEffectsController extends HostedService {
 		const folder = new Instance("Folder");
 		folder.Name = "WeaponVisuals";
 		folder.Parent = Workspace;
-		const active = new Map<number, { shot: ShotVisual; parts: Part[] }>(),
+		const active = new Map<number, { shot: ShotVisual; parts: Part[]; receivedAt: number }>(),
 			pool: Part[] = [],
 			ended = new Map<number, number>();
 		const acquire = () => {
@@ -56,7 +56,7 @@ export class WeaponEffectsController extends HostedService {
 				part.Color = shot.color;
 				parts.push(part);
 			}
-			active.set(shot.id, { shot, parts });
+			active.set(shot.id, { shot, parts, receivedAt: Workspace.GetServerTimeNow() });
 		});
 		this.event.subscribe(WeaponProtocol.hit.invoked, (hit) => {
 			clear(hit.id);
@@ -66,7 +66,10 @@ export class WeaponEffectsController extends HostedService {
 			const now = Workspace.GetServerTimeNow();
 			for (const [id, v] of active) {
 				const elapsed = math.max(0, now - v.shot.time);
-				if (elapsed >= v.shot.lifetime) {
+				// An instant laser must remain visible after receipt, even when its
+				// network transit time exceeds the short beam duration.
+				const visualAge = v.shot.endpoint ? now - v.receivedAt : elapsed;
+				if (visualAge >= v.shot.lifetime) {
 					clear(id);
 					continue;
 				}

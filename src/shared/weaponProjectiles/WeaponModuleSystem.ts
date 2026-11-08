@@ -70,31 +70,27 @@ export class WeaponModule {
 		return res;
 	}
 
-	update() {
-		//get all colided marker touches with
-		//iterate through the touched parts
-		//	if occupiedWithBlock !== undefined
-		//	if a block
-		//	if the same type
-		//	set module
+	update(candidates: readonly Model[]) {
+		// Query weapon geometry on this plot only, never scenery or player parts.
 		const foundMarkers = this.allMarkers;
 		const configMarkers = this.block.weaponConfig!.markers;
 		const params = new OverlapParams();
 		params.CollisionGroup = "Blocks";
-		params.FilterType = Enum.RaycastFilterType.Exclude;
-		params.AddToFilter(this.instance);
-		if (this.instance.PrimaryPart) params.AddToFilter(this.instance.PrimaryPart);
+		params.FilterType = Enum.RaycastFilterType.Include;
+		params.FilterDescendantsInstances = candidates.filter((m) => m !== this.instance);
 
 		const allCollidedCollections: Set<ModuleCollection> = new Set();
 		for (const [k, v] of pairs(configMarkers)) {
-			const marker = foundMarkers.get(k)!;
-			const touching = Workspace.GetPartsInPart(marker.markerInstance, params);
-
+			const marker = foundMarkers.get(k);
+			if (!marker) continue;
 			marker.occupiedWith.block = undefined;
 			marker.occupiedWith.module = undefined;
+			if (k !== "upgradeMarker" && (v.allowedBlockIds?.size() ?? 0) === 0) continue;
+			const touching = Workspace.GetPartsInPart(marker.markerInstance, params);
 
+			let closest = math.huge;
 			for (const t of touching) {
-				const touchingBlock = BlockManager.getBlockDataByPart(t); //get the first one
+				const touchingBlock = BlockManager.getBlockDataByPart(t);
 
 				if (!touchingBlock) continue;
 				const mod = WeaponModule.allModules[touchingBlock.uuid];
@@ -109,14 +105,21 @@ export class WeaponModule {
 				//check if the id of the block is the same as allowed for this module
 				const upgrade = k === "upgradeMarker" && mod.block.weaponConfig?.type === "UPGRADE";
 				if (!upgrade && !config.allowedBlockIds?.includes(mod.block.id)) continue;
+				const frame = mod.instance.GetPivot();
+				if (
+					!upgrade &&
+					(marker.markerInstance.CFrame.RightVector.Dot(frame.RightVector) < math.cos(math.rad(5)) ||
+						marker.markerInstance.CFrame.UpVector.Dot(frame.UpVector) < math.cos(math.rad(5)))
+				)
+					continue;
+				const distance = frame.Position.sub(marker.markerInstance.Position).Magnitude;
+				if (distance >= closest) continue;
+				closest = distance;
 				marker.occupiedWith.block = touchingBlock;
 				marker.occupiedWith.module = mod;
-
-				if (marker.occupiedWith.module.parentCollection !== this.parentCollection)
-					allCollidedCollections.add(marker.occupiedWith.module.parentCollection);
-
-				break;
 			}
+			if (marker.occupiedWith.module && marker.occupiedWith.module.parentCollection !== this.parentCollection)
+				allCollidedCollections.add(marker.occupiedWith.module.parentCollection);
 		}
 
 		this.parentCollection.combineWithModuleCollections(...allCollidedCollections);
@@ -321,63 +324,107 @@ export class ModuleCollection {
 
 @injectable
 export class WeaponModuleSystem extends HostedService {
-	constructor(@inject blockList: BlockList, @inject plots: SharedPlots) {
-		super();
+	private readonly dirty = new Set<Instance>();
+	private readonly folders = new Map<Instance, RBXScriptConnection[]>();
+	private readonly tracked = new Map<
+		Model,
+		{ module: WeaponModule; uuid: string; connections: RBXScriptConnection[] }
+	>();
 
-		const dirty = new Set<Instance>();
-		let nextUpdate = 0;
-		for (const p of plots.plots) {
-			const folder = p.instance.FindFirstChild("Blocks");
-			if (!folder) continue;
-			dirty.add(folder);
-			this.event.subscribe(folder.ChildAdded, () => dirty.add(folder));
-			this.event.subscribe(folder.ChildRemoved, () => dirty.add(folder));
+	constructor(
+		@inject private readonly blockList: BlockList,
+		@inject plots: SharedPlots,
+	) {
+		super();
+		// A player's Blocks folder is replaced when they claim a plot. Watch its
+		// parent as well as its contents, including folders created after startup.
+		for (const plot of plots.plots) {
+			this.event.subscribe(plot.instance.ChildAdded, (folder) => this.watchFolder(folder));
+			this.event.subscribe(plot.instance.ChildRemoved, (folder) => this.unwatchFolder(folder));
+			this.onEnable(() => {
+				for (const folder of plot.instance.GetChildren()) this.watchFolder(folder);
+			});
 		}
+		let nextUpdate = 0;
 		this.event.subscribe(RunService.Heartbeat, () => {
-			if (os.clock() < nextUpdate || dirty.size() === 0) return;
+			if (os.clock() < nextUpdate || this.dirty.size() === 0) return;
 			nextUpdate = os.clock() + 0.1;
-			for (const folder of dirty) {
-				const modules: WeaponModule[] = [];
-				for (const [id, m] of pairs(WeaponModule.allModules))
-					if (!m.instance.Parent) delete WeaponModule.allModules[id];
-				for (const child of folder.GetChildren()) {
-					if (!child.IsA("Model")) continue;
-					const info = BlockManager.getBlockDataByBlockModel(child as BlockModel);
-					if (!blockList.blocks[info.id]?.weaponConfig || !child.FindFirstChild("moduleMarkers")) continue;
-					let m = WeaponModule.allModules[info.uuid];
-					if (!m) {
-						m = new WeaponModule(info, blockList);
-						const primary = child.PrimaryPart;
-						const connection = primary?.GetPropertyChangedSignal("CFrame").Connect(() => {
-							if (primary.Anchored) dirty.add(folder);
-						});
-						const resized = primary?.GetPropertyChangedSignal("Size").Connect(() => {
-							if (primary.Anchored) dirty.add(folder);
-						});
-						const broken = child
-							.GetAttributeChangedSignal("CombatDestroyed")
-							.Connect(() => dirty.add(folder));
-						child.Destroying.Once(() => {
-							connection?.Disconnect();
-							resized?.Disconnect();
-							broken.Disconnect();
-						});
-					}
-					if (child.PrimaryPart?.Anchored)
-						for (const [, marker] of m.allMarkers)
-							marker.localFrame = child.GetPivot().ToObjectSpace(marker.markerInstance.CFrame);
-					m.pregeneratedCollection.modules.clear();
-					m.pregeneratedCollection.emitters.clear();
-					m.pregeneratedCollection.modules.add(m);
-					m.parentCollection = m.pregeneratedCollection;
-					m.parentCollection.init();
-					modules.push(m);
-				}
-				for (const m of modules) m.update();
-				const collections = new Set(modules.map((m) => m.parentCollection));
-				for (const c of collections) c.recalc();
-			}
-			dirty.clear();
+			for (const folder of [...this.dirty]) this.flush(folder);
 		});
+		this.onDestroy(() => {
+			for (const folder of [...this.folders.keys()]) this.unwatchFolder(folder);
+		});
+	}
+
+	private forget(model: Model) {
+		const tracked = this.tracked.get(model);
+		if (!tracked) return;
+		for (const connection of tracked.connections) connection.Disconnect();
+		if (WeaponModule.allModules[tracked.uuid] === tracked.module) delete WeaponModule.allModules[tracked.uuid];
+		this.tracked.delete(model);
+	}
+
+	private watchFolder(folder: Instance) {
+		if (folder.Name !== "Blocks" || !folder.IsA("Folder") || this.folders.has(folder)) return;
+		this.folders.set(folder, [
+			folder.ChildAdded.Connect(() => this.dirty.add(folder)),
+			folder.ChildRemoved.Connect((child) => {
+				if (child.IsA("Model")) this.forget(child);
+				this.dirty.add(folder);
+			}),
+		]);
+		this.dirty.add(folder);
+	}
+
+	private unwatchFolder(folder: Instance) {
+		for (const connection of this.folders.get(folder) ?? []) connection.Disconnect();
+		this.folders.delete(folder);
+		this.dirty.delete(folder);
+		for (const [model] of this.tracked) if (model.Parent === folder || !model.Parent) this.forget(model);
+	}
+
+	/** Rebuild only dirty plots; called before firing to avoid a first-shot race. */
+	flush(folder: Instance) {
+		if (!this.folders.has(folder) || !this.dirty.has(folder)) return;
+		this.dirty.delete(folder);
+		const modules: WeaponModule[] = [];
+		for (const child of folder.GetChildren()) {
+			if (!child.IsA("Model") || !child.PrimaryPart) continue;
+			const info = BlockManager.getBlockDataByBlockModel(child as BlockModel);
+			if (!this.blockList.blocks[info.id]?.weaponConfig || child.GetAttribute("CombatDestroyed") === true) {
+				this.forget(child);
+				continue;
+			}
+			let m = this.tracked.get(child)?.module;
+			if (!m) {
+				m = new WeaponModule(info, this.blockList);
+				const primary = child.PrimaryPart;
+				const markDirty = () => this.dirty.add(folder);
+				this.tracked.set(child, {
+					module: m,
+					uuid: info.uuid,
+					connections: [
+						primary.GetPropertyChangedSignal("CFrame").Connect(() => {
+							if (primary.Anchored) markDirty();
+						}),
+						primary.GetPropertyChangedSignal("Size").Connect(markDirty),
+						primary.GetPropertyChangedSignal("Anchored").Connect(markDirty),
+						child.GetAttributeChangedSignal("CombatDestroyed").Connect(markDirty),
+					],
+				});
+			}
+			for (const [, marker] of m.allMarkers)
+				marker.localFrame = child.GetPivot().ToObjectSpace(marker.markerInstance.CFrame);
+			m.pregeneratedCollection.modules.clear();
+			m.pregeneratedCollection.emitters.clear();
+			m.pregeneratedCollection.calculatedOutputs.clear();
+			m.pregeneratedCollection.modules.add(m);
+			m.parentCollection = m.pregeneratedCollection;
+			m.parentCollection.init();
+			modules.push(m);
+		}
+		const candidates = modules.map((m) => m.instance);
+		for (const m of modules) m.update(candidates);
+		for (const collection of new Set(modules.map((m) => m.parentCollection))) collection.recalc();
 	}
 }

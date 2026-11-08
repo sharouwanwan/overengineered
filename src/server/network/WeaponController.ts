@@ -7,6 +7,7 @@ import { BlockManager } from "shared/building/BlockManager";
 import { WeaponModule } from "shared/weaponProjectiles/WeaponModuleSystem";
 import { WeaponProtocol, weaponProfiles } from "shared/weaponProjectiles/WeaponProtocol";
 import type { PlayModeController } from "server/modes/PlayModeController";
+import type { WeaponModuleSystem } from "shared/weaponProjectiles/WeaponModuleSystem";
 import type { WeaponProfile } from "shared/weaponProjectiles/WeaponProtocol";
 type Projectile = {
 	id: number;
@@ -23,7 +24,7 @@ type Projectile = {
 type WeaponState = { ammo: number; ready: number; reloadAt: number; profile: WeaponProfile };
 @injectable
 export class WeaponController extends HostedService {
-	constructor(@inject modes: PlayModeController) {
+	constructor(@inject modes: PlayModeController, @inject modules: WeaponModuleSystem) {
 		super();
 		const states = new Map<Model, WeaponState>(),
 			active: Projectile[] = [];
@@ -71,8 +72,9 @@ export class WeaponController extends HostedService {
 				reload(core, state, now);
 				return;
 			}
+			if (core.Parent) modules.flush(core.Parent);
 			const module = WeaponModule.allModules[data.uuid];
-			if (!module) return;
+			if (!module || module.instance !== core) return;
 			const outputs = module.parentCollection.calculatedOutputs.filter(
 				(e) =>
 					e.source === module &&

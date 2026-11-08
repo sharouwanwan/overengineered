@@ -15,9 +15,6 @@ import { AutoPlotWelder } from "shared/building/PlotWelder";
 import { gameInfo } from "shared/GameInfo";
 import { RemoteEvents } from "shared/RemoteEvents";
 import { TagUtils } from "shared/utils/TagUtils";
-import { BulletProjectile } from "shared/weaponProjectiles/BulletProjectileLogic";
-import { LaserProjectile } from "shared/weaponProjectiles/LaserProjectileLogic";
-import { PlasmaProjectile } from "shared/weaponProjectiles/PlasmaProjectileLogic";
 
 const builder = new GameHostBuilder(gameInfo);
 SandboxGame.initialize(builder);
@@ -65,10 +62,6 @@ RemoteEvents.initialize();
 
 $log("Server loaded.");
 Workspace.AddTag(TagUtils.allTags.GAME_LOADED);
-
-PlasmaProjectile; // initializing the remote events
-BulletProjectile;
-LaserProjectile;
 
 Players.PlayerAdded.Connect((plr) => {
 	if (

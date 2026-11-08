@@ -11,7 +11,7 @@ export const CannonBreech = {
 	...BlockCreation.defaults,
 	id: "cannonbreech",
 	displayName: "Cannon Breech",
-	description: "",
+	description: "Attach a matching cannon base in front, then optional barrels. Hold Fire in Ride mode.",
 
 	weaponConfig: {
 		type: "CORE",

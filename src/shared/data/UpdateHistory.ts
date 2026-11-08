@@ -1,12 +1,21 @@
 // Increment for newly published notes. Historical groups share their recorded date.
-export const UPDATE_REVISION = 2;
+export const UPDATE_REVISION = 3;
 export const UPDATE_HISTORY = [
+	{
+		title: "Weapons & TNT fixes",
+		date: "8 Nov 2026 · Developer preview",
+		items: [
+			"TNT restored to simple controls; hit and performance fixes kept.",
+			"Fixed weapon registration after joining and reloading builds.",
+			"Improved barrel connections, firing retries and laser visibility.",
+			"Weapon assembly scans now run only on the server.",
+		],
+	},
 	{
 		title: "PvP & Logic",
 		date: "8 Nov 2026 · Developer preview",
 		items: [
 			"Weapons restricted to developers while fixes are tested.",
-			"TNT arming, timed fuse and proximity trigger.",
 			"Matrix blocks and readable matrix editing/display.",
 			"Smoother wing physics and wind updates.",
 		],
