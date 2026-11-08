@@ -47,7 +47,7 @@ const definition = {
 		holdLostTarget: {
 			displayName: "Hold Lost Target",
 			tooltip:
-				"Keep the last known world position when contact is lost. Offset still follows this radar. Cleared when disabled.",
+				"Keep the last known world position after losing contact. Turn off for range circuits that use zero Offset to restart searching. Cleared when disabled.",
 			types: { bool: { config: false } },
 		},
 		maxDistance: {
@@ -152,6 +152,22 @@ type radarBlock = BlockModel & {
 	RadarView: BasePart | UnionOperation | MeshPart;
 };
 
+// Legacy assets keep this child for compatibility. It is no longer a sensor or preview.
+const hideRadarView = (block: Model) => {
+	const view = block.FindFirstChild("RadarView");
+	if (!view?.IsA("BasePart")) return;
+	view.CanCollide = false;
+	view.CanTouch = false;
+	view.CanQuery = false;
+	view.CastShadow = false;
+	view.Transparency = 1;
+	view.Size = new Vector3(0.1, 0.1, 0.1);
+};
+
+// Build contacts use their bounding sphere; player contacts use the living root point.
+const liveRadarContact = (part: BasePart | undefined, sphere: number): part is BasePart =>
+	part?.Parent !== undefined && (sphere > 0 || (part.Parent.FindFirstChildOfClass("Humanoid")?.Health ?? 0) > 0);
+
 const radialSync = new BlockSynchronizer(
 	"b_radial_field",
 	t.interface({
@@ -162,23 +178,16 @@ const radialSync = new BlockSynchronizer(
 	({ block, radius, enabled }) => {
 		if (!radialFields.has(block)) block.Destroying.Once(() => radialFields.delete(block));
 		radialFields.set(block, { radius: math.clamp(radius, 0.5, 7500), enabled });
-		const view = block.FindFirstChild("RadarView");
-		if (view?.IsA("BasePart")) {
-			view.Transparency = 1;
-			view.CastShadow = false;
-			view.CanTouch = false;
-			view.Size = new Vector3(0.1, 0.1, 0.1);
-		}
+		hideRadarView(block);
 	},
 );
 class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radarBlock> {
 	constructor(block: InstanceBlockLogicArgs) {
 		super(definitionRadial, block);
+		// Feedback circuits need a defined zero before their first input evaluation.
+		this.output.distance.set("vector3", Vector3.zero);
 		const view = this.instance.RadarView;
-		view.Transparency = 1;
-		view.CastShadow = false;
-		view.CanTouch = false;
-		view.Size = new Vector3(0.1, 0.1, 0.1);
+		hideRadarView(this.instance);
 		const outline = new Instance("WireframeHandleAdornment");
 		outline.Name = "RadialRadarOutline";
 		outline.Adornee = this.instance.PrimaryPart;
@@ -187,7 +196,10 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 		outline.Transparency = 0.25;
 		outline.Visible = false;
 		outline.Parent = this.instance;
-		this.onDestroy(() => outline.Destroy());
+		this.onDestroy(() => {
+			outline.Destroy();
+			radialFields.delete(this.instance);
+		});
 		let radius = 50,
 			minimum = 5,
 			visible = false,
@@ -216,17 +228,17 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 			target = undefined;
 		};
 		const publish = (enabled: boolean) => radialSync.send({ block: this.instance, radius, enabled });
-		let dirty = true,
-			nextVisual = 0;
+		let visualDirty = true,
+			syncDirty = true,
+			nextSync = 0;
 		this.onk(["maxDistance"], ({ maxDistance }) => {
-			radius = maxDistance / 2;
-			dirty = true;
+			const nextRadius = maxDistance / 2;
+			if (radius === nextRadius) return;
+			radius = nextRadius;
+			visualDirty = syncDirty = true;
 			radialFields.set(this.instance, { radius, enabled: this.isEnabled() });
 		});
-		this.event.subscribe(RunService.Heartbeat, () => {
-			if (!dirty || os.clock() < nextVisual) return;
-			dirty = false;
-			nextVisual = os.clock() + 0.1;
+		const redraw = () => {
 			outline.Clear();
 			const xy: Vector3[] = [],
 				xz: Vector3[] = [],
@@ -242,7 +254,18 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 			outline.AddPath(xy, true);
 			outline.AddPath(xz, true);
 			outline.AddPath(yz, true);
-			publish(this.isEnabled());
+		};
+		this.event.subscribe(RunService.Heartbeat, () => {
+			// Local geometry follows every frame; only remote RWR updates are rate limited.
+			if (outline.Visible && visualDirty) {
+				visualDirty = false;
+				redraw();
+			}
+			if (syncDirty && os.clock() >= nextSync) {
+				syncDirty = false;
+				nextSync = os.clock() + 0.1;
+				publish(this.isEnabled());
+			}
 		});
 		this.onk(["minimalDistance", "detectSelf", "detectPlayers"], (values) => {
 			minimum = values.minimalDistance;
@@ -281,12 +304,14 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 				if (!candidates) {
 					candidates = radarBuildTargets(this.instance);
 					index = 0;
-					best = undefined;
+					// Any keeps an existing valid contact instead of walking the build list again.
+					best = anyTarget && liveRadarContact(target, targetSphere) ? target : undefined;
+					bestSphere = targetSphere;
 				}
 				const previousBest = best;
 				best = undefined;
 				bestDistance = farthest ? -1 : math.huge;
-				if (previousBest?.Parent) consider(previousBest, bestSphere);
+				if (liveRadarContact(previousBest, bestSphere)) consider(previousBest, bestSphere);
 				if (players)
 					for (const player of Players.GetPlayers()) {
 						if (!detectOwn && RunService.IsClient() && player === Players.LocalPlayer) continue;
@@ -316,7 +341,8 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 		);
 		this.onTicc(() => {
 			const origin = this.instance.GetPivot();
-			if (target?.Parent) {
+			if (!liveRadarContact(target, targetSphere)) target = undefined;
+			if (target) {
 				const delta = target.Position.sub(this.instance.PrimaryPart!.Position);
 				if (delta.Dot(delta) < minimum * minimum || !radialContains(delta, radius, targetSphere))
 					target = undefined;
@@ -330,9 +356,6 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 						: position.sub(origin.Position)
 					: Vector3.zero,
 			);
-		});
-		this.event.subscribe(RunService.Heartbeat, () => {
-			if (view.Parent) view.PivotTo(this.instance.GetPivot());
 		});
 		this.onEnable(() => {
 			invalidate();
@@ -386,15 +409,15 @@ const sectionSync = new BlockSynchronizer(
 			radius: math.clamp(radius, 0, 71000),
 			enabled,
 		});
+		hideRadarView(block);
 	},
 );
 class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, radarBlock> {
 	constructor(block: InstanceBlockLogicArgs) {
 		super(sectionDefinition, block);
+		this.output.distance.set("vector3", Vector3.zero);
 		const view = this.instance.RadarView;
-		view.CanTouch = false;
-		view.Transparency = 1;
-		view.Size = new Vector3(0.1, 0.1, 0.1);
+		hideRadarView(this.instance);
 		const outline = new Instance("WireframeHandleAdornment");
 		outline.Adornee = this.instance.PrimaryPart;
 		outline.Color3 = view.Color;
@@ -402,7 +425,10 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 		outline.Transparency = 0.25;
 		outline.Visible = false;
 		outline.Parent = this.instance;
-		this.onDestroy(() => outline.Destroy());
+		this.onDestroy(() => {
+			outline.Destroy();
+			sectionFields.delete(this.instance);
+		});
 		let length = 100,
 			radius = 100 * math.tan(math.rad(2.5)),
 			minimum = 5,
@@ -424,6 +450,8 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 		let candidates: readonly Model[] | undefined;
 		let index = 0;
 		let best: BasePart | undefined;
+		let targetSphere = 0,
+			bestSphere = 0;
 		let bestDistance = farthest ? -1 : math.huge;
 		let frame = sectionFrame(this.instance);
 		const memory = new RadarTargetMemory();
@@ -432,8 +460,9 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 			target = undefined;
 		};
 		const publish = (enabled: boolean) => sectionSync.send({ block: this.instance, length, radius, enabled });
-		let dirty = true,
-			nextVisual = 0;
+		let visualDirty = true,
+			syncDirty = true,
+			nextSync = 0;
 		const redraw = () => {
 			outline.Clear();
 			const rim: Vector3[] = [];
@@ -446,20 +475,27 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 			outline.AddPath(rim, true);
 		};
 		this.event.subscribe(RunService.Heartbeat, () => {
-			if (!dirty || os.clock() < nextVisual) return;
-			dirty = false;
-			nextVisual = os.clock() + 0.1;
-			redraw();
-			publish(this.isEnabled());
+			if (outline.Visible && visualDirty) {
+				visualDirty = false;
+				redraw();
+			}
+			if (syncDirty && os.clock() >= nextSync) {
+				syncDirty = false;
+				nextSync = os.clock() + 0.1;
+				publish(this.isEnabled());
+			}
 		});
 		this.onk(["maxDistance", "coneAngle", "detectionSize"], (values) => {
-			length = values.maxDistance;
-			radius =
+			const nextLength = values.maxDistance;
+			const nextRadius =
 				values.coneAngle > 0
-					? length * math.tan(math.rad(values.coneAngle / 2))
+					? nextLength * math.tan(math.rad(values.coneAngle / 2))
 					: values.detectionSize * (values.detectionSize - math.sqrt(1 / 3)) * 5;
-			// Preserve acquisition and update local geometry immediately; coalesce preview/network work.
-			dirty = true;
+			if (length === nextLength && radius === nextRadius) return;
+			length = nextLength;
+			radius = nextRadius;
+			// Preserve acquisition; range changes do not restart a partial search.
+			visualDirty = syncDirty = true;
 			sectionFields.set(this.instance, { length, radius, enabled: this.isEnabled() });
 		});
 		this.onk(["minimalDistance", "detectSelf", "detectPlayers"], (values) => {
@@ -495,12 +531,13 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 						return;
 					bestDistance = distance;
 					best = part;
+					bestSphere = sphere;
 				};
 				if (candidates) {
 					const previousBest = best;
 					best = undefined;
 					bestDistance = farthest ? -1 : math.huge;
-					if (previousBest?.Parent) consider(previousBest, previousBest.Size.Magnitude / 2);
+					if (liveRadarContact(previousBest, bestSphere)) consider(previousBest, bestSphere);
 				}
 				if (!candidates) {
 					candidates = radarBuildTargets(this.instance);
@@ -508,6 +545,7 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 					best = undefined;
 					bestDistance = farthest ? -1 : math.huge;
 					frame = sectionFrame(this.instance);
+					if (anyTarget && liveRadarContact(target, targetSphere)) consider(target, targetSphere);
 					if (players)
 						for (const player of Players.GetPlayers()) {
 							if (!detectOwn && RunService.IsClient() && player === Players.LocalPlayer) continue;
@@ -528,22 +566,25 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 					consider(root, root.Size.Magnitude / 2);
 					if (os.clock() - start >= 0.002) break;
 				}
-				if (best || index >= candidates.size()) target = best;
+				if (best || index >= candidates.size()) {
+					target = best;
+					targetSphere = bestSphere;
+				}
 				if ((anyTarget && best) || index >= candidates.size()) candidates = undefined;
 				return candidates !== undefined;
 			}),
 		);
 		this.onTicc(() => {
-			if (
-				target?.Parent &&
-				!coneContainsSphere(
-					sectionFrame(this.instance).PointToObjectSpace(target.Position),
-					target.Size.Magnitude / 2,
-					length,
-					radius,
+			if (!liveRadarContact(target, targetSphere)) target = undefined;
+			if (target) {
+				const frame = sectionFrame(this.instance),
+					delta = target.Position.sub(frame.Position);
+				if (
+					delta.Dot(delta) < minimum * minimum ||
+					!coneContainsSphere(frame.PointToObjectSpace(target.Position), targetSphere, length, radius)
 				)
-			)
-				target = undefined;
+					target = undefined;
+			}
 			const position = memory.update(target?.Parent ? target.Position : undefined, hold),
 				origin = this.instance.GetPivot();
 			this.output.distance.set(
@@ -554,9 +595,6 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 						: position.sub(origin.Position)
 					: Vector3.zero,
 			);
-		});
-		this.event.subscribe(RunService.Heartbeat, () => {
-			if (view.Parent) view.PivotTo(this.instance.GetPivot());
 		});
 		this.onEnable(() => {
 			invalidate();

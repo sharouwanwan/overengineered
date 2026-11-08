@@ -27,9 +27,6 @@ TNT uses its original Explode, Explosion radius, Explosion pressure, Flammable a
 - Numerical Filter supports Number and Vector3, Low-pass/High-pass, seconds-based time constant and Reset. No separate derivative block.
 - Memory's default seeds the value and is used by Reset. Changing Default alone does not overwrite a stored value. Reset takes precedence over Set.
 - Radial Detection Diameter is twice reach. For radius feedback, wire 2 * (Offset magnitude + margin). Section Max Distance measures cone-axis length. Any returns a valid contact without distance ranking; Nearest/Farthest rank by distance. Scenery is excluded.
+- Disable Hold Lost Target when using zero Offset to switch a mux back to full search range. Holding intentionally preserves a nonzero last position. Both radars use mathematical volume tests over build/player contacts, not touch sensors. Visible outlines redraw on changed frames; network field updates remain limited to 10 Hz.
 
-## Release notes
-
-Edit src/shared/data/UpdateHistory.ts and increment UPDATE_REVISION only for new player-facing notes. Opening UPD saves the read revision through player data. Published games persist it; the local-file Studio database is intentionally in memory. Historical entries use their recorded date where the original implementation date was not retained.
-
-Heating and infrared sensors remain deferred.
+The UPD button, changelog popup and unread-revision tracking have been removed. Weapon development/testing is on hold. Heating and infrared sensors remain deferred.

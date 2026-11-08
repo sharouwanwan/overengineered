@@ -73,10 +73,7 @@ export function validRequest(name: string, arg: unknown): boolean {
 	if (name === "player_upddata")
 		return (
 			record(arg) &&
-			(arg.key === "lastReadUpdate" ||
-				arg.key === "lastJoin" ||
-				arg.key === "lastLaunchedVersion" ||
-				arg.key === "warnings") &&
+			(arg.key === "lastJoin" || arg.key === "lastLaunchedVersion" || arg.key === "warnings") &&
 			finite(arg.value)
 		);
 	if (name === "player_init_admin") return integer(arg);

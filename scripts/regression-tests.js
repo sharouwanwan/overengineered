@@ -663,11 +663,11 @@ class RadialLogicStub {
  change(values){for(const hook of this.hooks)if(hook.keys.every(key=>key in values))hook.fn(values);}
 }
 const radialAst=ts.createSourceFile('radar.ts',fs.readFileSync('src/shared/blocks/blocks/RadarSectionBlock.ts','utf8'),ts.ScriptTarget.Latest,true);
-const radialNodes=radialAst.statements.filter(s=>(ts.isVariableStatement(s)&&s.declarationList.declarations.some(d=>['definition','definitionRadial'].includes(d.name.getText(radialAst))))||(ts.isClassDeclaration(s)&&s.name.text==='RadialRadarLogic'));
+const radialNodes=radialAst.statements.filter(s=>(ts.isVariableStatement(s)&&s.declarationList.declarations.some(d=>['definition','definitionRadial','hideRadarView','liveRadarContact'].includes(d.name.getText(radialAst))))||(ts.isClassDeclaration(s)&&s.name.text==='RadialRadarLogic'));
 const radialContext={inferEnumLogicType:v=>v,InstanceBlockLogic:RadialLogicStub,Vector3:RadialVector,Instance:class {Clear(){} AddPath(){} Destroy(){}},math:{pi:Math.PI,cos:Math.cos,sin:Math.sin,huge:Infinity},os:{clock:()=>0},radialSync:{send(){}},radialFields:new Map(),radialContains,RadarTargetMemory:radarHelpers.RadarTargetMemory,scheduleRadar:fn=>{radialScan=fn;return {Disconnect(){}};},radarBuildTargets:()=>radialCandidates,RunService:{IsClient:()=>true,Heartbeat:{}},Players:{GetPlayers:()=>radialPlayers}};
 vm.runInNewContext(ts.transpileModule(radialNodes.map(s=>radarPrinter.printNode(ts.EmitHint.Unspecified,s,radialAst)).join('\n').replaceAll('.size()','.length')+'\nglobalThis.Radial=RadialRadarLogic;', {compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,radialContext);
 const radialFolder={Name:'Blocks'},radialOrigin=RadialVector.zero;
-const radialInstance={Parent:radialFolder,PrimaryPart:{Position:radialOrigin},RadarView:{Color:{}},GetPivot:()=>({Position:radialOrigin,PointToObjectSpace:p=>p.sub(radialOrigin)})};
+const radialInstance={Parent:radialFolder,PrimaryPart:{Position:radialOrigin},RadarView:{Color:{},IsA:()=>true},FindFirstChild(name){return this[name];},GetPivot:()=>({Position:radialOrigin,PointToObjectSpace:p=>p.sub(radialOrigin)})};
 const radialLogic=new radialContext.Radial({instance:radialInstance});
 radialLogic.change({maxDistance:15000});
 const farRoot={Parent:{},Position:new RadialVector(7000,0,0),Size:new RadialVector(2,2,2)};
@@ -678,7 +678,7 @@ farRoot.Position=new RadialVector(7000,0,0);radialScan();radialLogic.change({rel
 farRoot.Position=new RadialVector(8000,0,0);radialLogic.tick();assert.equal(radialOutput.X,7000);
 radialLogic.disables.forEach(fn=>fn());assert.equal(radialOutput,RadialVector.zero);
 radialLogic.change({minimalDistance:5,detectSelf:false,detectPlayers:false});radialScan();radialLogic.tick();assert.equal(radialOutput,RadialVector.zero);
-radialCandidates=[];const playerRoot={Parent:{},IsA:()=>true,Position:new RadialVector(6000,0,0)};
+radialCandidates=[];const playerRoot={Parent:{FindFirstChildOfClass:()=>({Health:100})},IsA:()=>true,Position:new RadialVector(6000,0,0)};
 radialPlayers=[{Character:{FindFirstChildOfClass:()=>({Health:100}),FindFirstChild:()=>playerRoot}}];
 radialLogic.change({minimalDistance:5,detectSelf:false,detectPlayers:true});radialScan();radialLogic.tick();assert.equal(radialOutput.X,6000);
 assert.equal(radialInstance.RadarView.Size.X,0.1);
@@ -698,7 +698,7 @@ require("./pvp-regression-tests.js");
 // Any uses discovery order, while Nearest and Farthest explicitly rank contacts.
 radialCandidates.reverse();radialLogic.change({selection:'any'});radialScan();radialLogic.tick();assert.equal(radialOutput.X,450);
 radialLogic.change({selection:'nearest'});radialScan();radialLogic.tick();assert.equal(radialOutput.X,300);
-const sectionNodes=radialAst.statements.filter(s=>(ts.isVariableStatement(s)&&s.declarationList.declarations.some(d=>['definition','sectionDefinition'].includes(d.name.getText(radialAst))))||(ts.isClassDeclaration(s)&&s.name.text==='RadarSectionLogic'));
+const sectionNodes=radialAst.statements.filter(s=>(ts.isVariableStatement(s)&&s.declarationList.declarations.some(d=>['definition','sectionDefinition','hideRadarView','liveRadarContact'].includes(d.name.getText(radialAst))))||(ts.isClassDeclaration(s)&&s.name.text==='RadarSectionLogic'));
 const sectionContext={...radialContext,sectionSync:{send(){}},sectionFields:new Map(),sectionFrame:()=>({Position:RadialVector.zero,PointToObjectSpace:p=>p}),coneContainsSphere,math:{...radialContext.math,tan:Math.tan,rad:n=>n*Math.PI/180,sqrt:Math.sqrt}};
 vm.runInNewContext(ts.transpileModule(sectionNodes.map(s=>radarPrinter.printNode(ts.EmitHint.Unspecified,s,radialAst)).join('\n').replaceAll('.size()','.length')+'\nglobalThis.Section=RadarSectionLogic;', {compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,sectionContext);
 const sectionLogic=new sectionContext.Section({instance:radialInstance});
@@ -707,3 +707,5 @@ sectionLogic.change({maxDistance:1000,coneAngle:30,detectionSize:1});radialScan(
 for(let i=0;i<20;i++){sectionLogic.change({maxDistance:radialOutput.Magnitude+30,coneAngle:30,detectionSize:1});sectionLogic.tick();assert.equal(radialOutput.Y,300);}
 sectionLogic.change({maxDistance:200,coneAngle:30,detectionSize:1});sectionLogic.tick();assert.equal(radialOutput,RadialVector.zero);
 console.log('Any/Nearest/Farthest ordering and actual Section range-feedback loop passed.');
+
+require("./radar-feedback-tests.js");
