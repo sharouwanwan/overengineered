@@ -401,7 +401,7 @@ class TestLogic {
 	constructor(def, block) {
 		this.instance = block.instance;
 		this.definition = def;
-		this.output={armed:{set(){}},triggered:{set(){}},remaining:{set(){}}};
+		this.output=Object.fromEntries(Object.keys(def.output).map(key => [key, {set(){}}]));
 		this.enabled = true;
 		this.disableCallbacks = [];
 		this.event = { subscribe: (signal, fn) => tntEvents.set(signal, fn) };
@@ -452,6 +452,14 @@ const { TNTBlocks } = load(
 		math: { max: Math.max, min: Math.min },
 	},
 );
+// The Studio block registry requires unique wire IDs across both directions.
+// A collision aborts server startup before GAME_LOADED can be published.
+for (const block of TNTBlocks) {
+	const { input, output } = block.logic.definition;
+	for (const key of Object.keys(output)) {
+		assert.equal(Object.hasOwn(input, key), false, `TNT input/output wire ID collision: ${key}`);
+	}
+}
 const tntLogic = new TNTBlocks[0].logic.ctor({ instance: { Part: explosivePart, Parent: {} } });
 tntEvents.get(heartbeatSignal)();
 tntEvents.get(contactSignal)({ CanCollide: true, AssemblyRootPart: {}, GetVelocityAtPosition() {} });

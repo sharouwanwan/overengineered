@@ -87,7 +87,7 @@ const definition = {
 		},
 	},
 	output: {
-		armed: { displayName: "Armed", types: ["bool"] },
+		isArmed: { displayName: "Is Armed", types: ["bool"] },
 		triggered: { displayName: "Fuse Triggered", types: ["bool"] },
 		remaining: { displayName: "Fuse Remaining", types: ["number"] },
 	},
@@ -175,7 +175,7 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 					}
 				}
 			}
-			this.output.armed.set("bool", ready);
+			this.output.isArmed.set("bool", ready);
 			this.output.triggered.set("bool", fuse.triggered());
 			this.output.remaining.set("number", fuse.remaining(now));
 			if (ready && fuse.due(now)) explodeTNT();
