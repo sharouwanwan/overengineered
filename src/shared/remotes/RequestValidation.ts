@@ -60,12 +60,23 @@ const frame = (v: unknown) => typeIs(v, "CFrame");
 
 /** Validate operation shapes before accessing caller-supplied properties. */
 export function validRequest(name: string, arg: unknown): boolean {
+	if (name === "weapon_fire")
+		return (
+			record(arg) &&
+			instance(arg.core) &&
+			arg.core.IsA("Model") &&
+			typeIs(arg.color, "Color3") &&
+			boolean(arg.reload)
+		);
 	if (name === "player_fetchdata" || name === "player_init" || name === "player_loaded") return arg === undefined;
 	if (name === "player_updsettings") return settings(arg);
 	if (name === "player_upddata")
 		return (
 			record(arg) &&
-			(arg.key === "lastJoin" || arg.key === "lastLaunchedVersion" || arg.key === "warnings") &&
+			(arg.key === "lastReadUpdate" ||
+				arg.key === "lastJoin" ||
+				arg.key === "lastLaunchedVersion" ||
+				arg.key === "warnings") &&
 			finite(arg.value)
 		);
 	if (name === "player_init_admin") return integer(arg);
@@ -107,31 +118,13 @@ export function validRequest(name: string, arg: unknown): boolean {
 		);
 	if (name === "b_button_click") return instance(arg) && arg.IsA("Model");
 	if (name === "b_radio_transmitter_send") return record(arg) && finite(arg.frequency) && text(arg.valueType);
-	if (name === "projectile_damage")
-		return (
-			record(arg) && instance(arg.part) && finite(arg.damage) && arg.damage >= 0 && array(arg.modifiers, modifier)
-		);
-	if (name === "shell_spawn" || name === "bullet_spawn" || name === "plasma_spawn")
-		return (
-			record(arg) &&
-			typeIs(arg.startPosition, "Vector3") &&
-			typeIs(arg.baseVelocity, "Vector3") &&
-			finite(arg.baseDamage) &&
-			arg.baseDamage >= 0 &&
-			modifier(arg.modifier) &&
-			optional(arg.color, (v) => typeIs(v, "Color3"))
-		);
-	if (name === "laser_destroy") return record(arg) && instance(arg.originPart);
-	if (name === "laser_spawn")
-		return (
-			record(arg) &&
-			instance(arg.originPart) &&
-			instance(arg.owner) &&
-			typeIs(arg.color, "Color3") &&
-			finite(arg.baseDamage) &&
-			arg.baseDamage >= 0 &&
-			modifier(arg.modifier)
-		);
+	// Legacy client-authored projectile/damage remotes are retired.
+	if (
+		["projectile_damage", "shell_spawn", "bullet_spawn", "plasma_spawn", "laser_spawn", "laser_destroy"].includes(
+			name,
+		)
+	)
+		return false;
 	if (name === "b_camera_update") return record(arg) && instance(arg.block) && boolean(arg.enabled);
 	if (name === "b_disconnectblock_disconnect" || name === "b_propellantblock_disconnect")
 		return record(arg) && instance(arg.block);

@@ -25,6 +25,7 @@ import { BuildingBlocks } from "shared/blocks/blocks/grouped/BuildingBlocks";
 import { HingeBlocks } from "shared/blocks/blocks/grouped/HingeBlocks";
 import { LampBlocks } from "shared/blocks/blocks/grouped/LampBlocks";
 import { LinearSliderBlocks } from "shared/blocks/blocks/grouped/LinearSliders";
+import { MatrixBlocks } from "shared/blocks/blocks/grouped/MatrixBlocks";
 import { MechanicalBlocks } from "shared/blocks/blocks/grouped/MechanicalBlocks";
 import { PassengerSeatBlocks } from "shared/blocks/blocks/grouped/PassengerSeatBlocks";
 import { PropellantBlocks } from "shared/blocks/blocks/grouped/PropellantBlocks";
@@ -59,6 +60,7 @@ import { MassSensorBlock } from "shared/blocks/blocks/MassSensorBlock";
 import { MotorBlock } from "shared/blocks/blocks/MotorBlock";
 import { MouseSensorBlock } from "shared/blocks/blocks/MouseSensorBlock";
 import { NonVolatileMemoryBlock } from "shared/blocks/blocks/NonVolatileMemoryBlock";
+import { NumericalFilterBlock } from "shared/blocks/blocks/NumericalFilterBlock";
 import { OwnerCameraLocatorBlock } from "shared/blocks/blocks/OwnerCameraLocatorBlock";
 import { OwnerLocatorBlock } from "shared/blocks/blocks/OwnerLocatorBlock";
 import { ParticleBlocks } from "shared/blocks/blocks/particle/ParticleBlocks";
@@ -108,7 +110,6 @@ import { PlasmaGunBarrelBlock } from "shared/blocks/blocks/Weaponry/Plasma/Plasm
 import { PlasmaGunBlock } from "shared/blocks/blocks/Weaponry/Plasma/PlasmaGunBlock";
 import { PlasmaSeparatorMuzzleBlock } from "shared/blocks/blocks/Weaponry/Plasma/PlasmaSeparatorMuzzleBlock";
 import { PlasmaShotgunMuzzleBlock } from "shared/blocks/blocks/Weaponry/Plasma/PlasmaShotgunMuzzleBlock";
-import { GameDefinitions } from "shared/data/GameDefinitions";
 import type { BlockBuilder } from "shared/blocks/Block";
 
 export const CreateSandboxBlocks = (di: DIContainer): BlockList => {
@@ -139,6 +140,8 @@ export const CreateSandboxBlocks = (di: DIContainer): BlockList => {
 	];
 
 	const blocksArr: BlockBuilder[] = [
+		NumericalFilterBlock,
+		...MatrixBlocks,
 		...BuildingBlocks,
 		...MechanicalBlocks,
 		...BasicOperationBlocks,
@@ -245,13 +248,7 @@ export const CreateSandboxBlocks = (di: DIContainer): BlockList => {
 		...GraviEngineBlocks,
 	];
 
-	if (GameDefinitions.isTesting) {
-		const testBlocks: readonly BlockBuilder[] = [...weapons];
-
-		for (const block of testBlocks) {
-			blocksArr.push(block);
-		}
-	}
+	for (const weapon of weapons) blocksArr.push({ ...weapon, devOnly: true });
 
 	return BlockListBuilder.buildBlockList(blocksArr, di);
 };

@@ -8,6 +8,7 @@ import { ConfigControlCode } from "client/gui/configControls/ConfigControlCode";
 import { ConfigControlColor3 } from "client/gui/configControls/ConfigControlColor";
 import { ConfigControlEmpty } from "client/gui/configControls/ConfigControlEmpty";
 import { ConfigControlKeyOrString } from "client/gui/configControls/ConfigControlKey";
+import { ConfigControlMatrix3 } from "client/gui/configControls/ConfigControlMatrix3";
 import { ConfigControlMulti } from "client/gui/configControls/ConfigControlMulti";
 import { ConfigControlMultiKeys } from "client/gui/configControls/ConfigControlMultiKeys";
 import { ConfigControlNumber } from "client/gui/configControls/ConfigControlNumber";
@@ -38,6 +39,7 @@ import { ArgsSignal } from "engine/shared/event/Signal";
 import { Objects } from "engine/shared/fixes/Objects";
 import { BlockConfig } from "shared/blockLogic/BlockConfig";
 import { BlockWireManager } from "shared/blockLogic/BlockWireManager";
+import { Matrix3Text } from "shared/blockLogic/Matrix3Text";
 import { Colors } from "shared/Colors";
 import type { ColorChooserDefinition } from "client/gui/ColorChooser";
 import type { ConfigControlMultiDefinition } from "client/gui/configControls/ConfigControlMulti";
@@ -421,6 +423,37 @@ namespace Controls {
 				control.value.set(sameOrUndefined(config) ?? Colors.white);
 
 				control.value.submitted.Connect((v) => this.submitted.Fire((config = map(config, (_) => v))));
+			}
+		}
+
+		export class matrix3 extends Base<TextBoxControlDefinition, "matrix3"> {
+			constructor(
+				templates: templates,
+				definition: MiniPrimitives["matrix3"],
+				config: ConfigParts<"matrix3">,
+				args: Args,
+			) {
+				super(templates.Text());
+				const box = this.control;
+				box.MultiLine = true;
+				box.TextWrapped = true;
+				box.TextScaled = false;
+				box.ClearTextOnFocus = false;
+				box.TextSize = 16;
+				box.Font = Enum.Font.Code;
+				box.TextXAlignment = Enum.TextXAlignment.Left;
+				box.TextYAlignment = Enum.TextYAlignment.Top;
+				box.Size = new UDim2(1, 0, 0, 100);
+				const control = this.parent(new TextBoxControl(box));
+				const value = sameOrUndefined(config);
+				control.text.set(value ? Matrix3Text.format(value, true) : "");
+				control.submitted.Connect((text) => {
+					const matrix = Matrix3Text.parse(text);
+					if (matrix) {
+						this.submitted.Fire((config = map(config, () => matrix)));
+						control.text.set(Matrix3Text.format(matrix, true));
+					}
+				});
 			}
 		}
 
@@ -880,6 +913,7 @@ namespace Controls {
 		bytearray: (templates, definition, config, parent) => new Controls.bytearray(templates, definition, config),
 		code: (templates, definition, config, parent) => new Controls.code(templates, definition, config),
 		color: (templates, definition, config, parent) => new Controls.color(templates, definition, config),
+		matrix3: (templates, definition, config, parent) => new Controls.matrix3(templates, definition, config, parent),
 		vector3: (templates, definition, config, parent) => new Controls.vector3(templates, definition, config, parent),
 		enum: (templates, definition, config, parent) => new Controls._enum(templates, definition, config),
 		sound: (templates, definition, config, parent) => new Controls.sound(templates, definition, config, parent),
@@ -1370,6 +1404,8 @@ class ConfigAutoValueWrapper extends Control<ConfigValueWrapperDefinition> {
 						return new ConfigControlKeyOrString(clone(templates.Key), blockdef.displayName) //
 							.setValues(values);
 					},
+					matrix3: (values, blockdef) =>
+						new ConfigControlMatrix3(clone(templates.String), blockdef.displayName).setValues(values),
 					vector3: (values, blockdef) => {
 						return new ConfigControlVector3(clone(templates.Vector3), blockdef.displayName) //
 							.setValues(values);

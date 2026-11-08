@@ -1,6 +1,7 @@
 import { Players, RunService } from "@rbxts/services";
 import { t } from "engine/shared/t";
 import { InstanceBlockLogic as InstanceBlockLogic } from "shared/blockLogic/BlockLogic";
+import { inferEnumLogicType } from "shared/blockLogic/BlockLogicTypes";
 import { BlockSynchronizer } from "shared/blockLogic/BlockSynchronizer";
 import { scheduleRadar } from "shared/blockLogic/RadarScheduler";
 import { RadarTargetMemory } from "shared/blockLogic/RadarTargetMemory";
@@ -21,8 +22,23 @@ const definition = {
 		"minimalDistance",
 		"detectPlayers",
 		"holdLostTarget",
+		"selection",
 	],
 	input: {
+		selection: {
+			displayName: "Target Selection",
+			types: {
+				enum: inferEnumLogicType({
+					config: "any",
+					elementOrder: ["any", "nearest", "farthest"],
+					elements: {
+						any: { displayName: "Any", tooltip: "Keep any valid contact; no distance priority." },
+						nearest: { displayName: "Nearest" },
+						farthest: { displayName: "Farthest" },
+					},
+				}),
+			},
+		},
 		detectPlayers: {
 			displayName: "Detect Players",
 			tooltip: "Also detect living players whose character root is inside the detection area.",
@@ -118,13 +134,13 @@ const definitionRadial = {
 			...definition.input.maxDistance,
 			displayName: "Detection Diameter",
 			tooltip:
-				"Full width of the spherical detection area. Detection reaches half this distance from the radar in every direction.",
+				"Full width, not radius. For range feedback wire 2 * (Offset magnitude + margin). Reach is half this value.",
 			types: {
 				number: {
 					...definition.input.maxDistance.types.number,
 					clamp: {
 						...definition.input.maxDistance.types.number.clamp,
-						max: 20480,
+						max: 15000,
 					},
 				},
 			},
@@ -145,7 +161,7 @@ const radialSync = new BlockSynchronizer(
 	}),
 	({ block, radius, enabled }) => {
 		if (!radialFields.has(block)) block.Destroying.Once(() => radialFields.delete(block));
-		radialFields.set(block, { radius: math.clamp(radius, 0.5, 10240), enabled });
+		radialFields.set(block, { radius: math.clamp(radius, 0.5, 7500), enabled });
 		const view = block.FindFirstChild("RadarView");
 		if (view?.IsA("BasePart")) {
 			view.Transparency = 1;
@@ -179,10 +195,19 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 			players = false,
 			relative = true,
 			hold = false;
+		let farthest = false,
+			anyTarget = true;
+		this.onk(["selection"], ({ selection }) => {
+			farthest = selection === "farthest";
+			anyTarget = selection === "any";
+			candidates = undefined;
+			best = undefined;
+			target = undefined;
+		});
 		let target: BasePart | undefined, best: BasePart | undefined;
 		let targetSphere = 0,
 			bestSphere = 0,
-			bestDistance = math.huge,
+			bestDistance = farthest ? -1 : math.huge,
 			index = 0;
 		let candidates: readonly Model[] | undefined;
 		const memory = new RadarTargetMemory();
@@ -191,9 +216,17 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 			target = undefined;
 		};
 		const publish = (enabled: boolean) => radialSync.send({ block: this.instance, radius, enabled });
+		let dirty = true,
+			nextVisual = 0;
 		this.onk(["maxDistance"], ({ maxDistance }) => {
 			radius = maxDistance / 2;
-			invalidate();
+			dirty = true;
+			radialFields.set(this.instance, { radius, enabled: this.isEnabled() });
+		});
+		this.event.subscribe(RunService.Heartbeat, () => {
+			if (!dirty || os.clock() < nextVisual) return;
+			dirty = false;
+			nextVisual = os.clock() + 0.1;
 			outline.Clear();
 			const xy: Vector3[] = [],
 				xz: Vector3[] = [],
@@ -233,7 +266,11 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 						distance = delta.Dot(delta);
 					if (
 						distance < minimum * minimum ||
-						distance >= bestDistance ||
+						(anyTarget
+							? best !== undefined
+							: farthest
+								? distance <= bestDistance
+								: distance >= bestDistance) ||
 						!radialContains(delta, radius, sphere)
 					)
 						return;
@@ -248,7 +285,7 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 				}
 				const previousBest = best;
 				best = undefined;
-				bestDistance = math.huge;
+				bestDistance = farthest ? -1 : math.huge;
 				if (previousBest?.Parent) consider(previousBest, bestSphere);
 				if (players)
 					for (const player of Players.GetPlayers()) {
@@ -260,7 +297,7 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 					}
 				const start = os.clock();
 				let checked = 0;
-				while (index < candidates.size() && checked++ < 256) {
+				while (index < candidates.size() && !(anyTarget && best) && checked++ < 256) {
 					const model = candidates[index++],
 						root = model.PrimaryPart;
 					if (model === this.instance || !root?.Parent || !model.Parent || model.Parent.Name !== "Blocks")
@@ -273,7 +310,7 @@ class RadialRadarLogic extends InstanceBlockLogic<typeof definitionRadial, radar
 					target = best;
 					targetSphere = bestSphere;
 				}
-				if (index >= candidates.size()) candidates = undefined;
+				if ((anyTarget && best) || index >= candidates.size()) candidates = undefined;
 				return candidates !== undefined;
 			}),
 		);
@@ -320,11 +357,11 @@ const sectionDefinition = {
 		maxDistance: {
 			...definition.input.maxDistance,
 			tooltip: "Detection length along the cone axis.",
-			types: { number: { config: 100, clamp: { showAsSlider: true, min: 1, max: 40960 } } },
+			types: { number: { config: 100, clamp: { showAsSlider: true, min: 1, max: 15000 } } },
 		},
 		minimalDistance: {
 			...definition.input.minimalDistance,
-			types: { number: { config: 5, clamp: { showAsSlider: true, min: 0, max: 40960 } } },
+			types: { number: { config: 5, clamp: { showAsSlider: true, min: 0, max: 15000 } } },
 		},
 		coneAngle: {
 			displayName: "Cone Angle (degrees)",
@@ -345,7 +382,7 @@ const sectionSync = new BlockSynchronizer(
 	({ block, length, radius, enabled }) => {
 		if (!sectionFields.has(block)) block.Destroying.Once(() => sectionFields.delete(block));
 		sectionFields.set(block, {
-			length: math.clamp(length, 1, 40960),
+			length: math.clamp(length, 1, 15000),
 			radius: math.clamp(radius, 0, 71000),
 			enabled,
 		});
@@ -374,11 +411,20 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 			detectOwn = true,
 			players = false,
 			hold = false;
+		let farthest = false,
+			anyTarget = true;
+		this.onk(["selection"], ({ selection }) => {
+			farthest = selection === "farthest";
+			anyTarget = selection === "any";
+			candidates = undefined;
+			best = undefined;
+			target = undefined;
+		});
 		let target: BasePart | undefined;
 		let candidates: readonly Model[] | undefined;
 		let index = 0;
 		let best: BasePart | undefined;
-		let bestDistance = math.huge;
+		let bestDistance = farthest ? -1 : math.huge;
 		let frame = sectionFrame(this.instance);
 		const memory = new RadarTargetMemory();
 		const invalidate = () => {
@@ -386,6 +432,8 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 			target = undefined;
 		};
 		const publish = (enabled: boolean) => sectionSync.send({ block: this.instance, length, radius, enabled });
+		let dirty = true,
+			nextVisual = 0;
 		const redraw = () => {
 			outline.Clear();
 			const rim: Vector3[] = [];
@@ -397,15 +445,22 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 			}
 			outline.AddPath(rim, true);
 		};
+		this.event.subscribe(RunService.Heartbeat, () => {
+			if (!dirty || os.clock() < nextVisual) return;
+			dirty = false;
+			nextVisual = os.clock() + 0.1;
+			redraw();
+			publish(this.isEnabled());
+		});
 		this.onk(["maxDistance", "coneAngle", "detectionSize"], (values) => {
 			length = values.maxDistance;
 			radius =
 				values.coneAngle > 0
 					? length * math.tan(math.rad(values.coneAngle / 2))
 					: values.detectionSize * (values.detectionSize - math.sqrt(1 / 3)) * 5;
-			invalidate();
-			redraw();
-			publish(this.isEnabled());
+			// Preserve acquisition and update local geometry immediately; coalesce preview/network work.
+			dirty = true;
+			sectionFields.set(this.instance, { length, radius, enabled: this.isEnabled() });
 		});
 		this.onk(["minimalDistance", "detectSelf", "detectPlayers"], (values) => {
 			minimum = values.minimalDistance;
@@ -430,7 +485,11 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 					const distance = delta.Dot(delta);
 					if (
 						distance < minimum * minimum ||
-						distance >= bestDistance ||
+						(anyTarget
+							? best !== undefined
+							: farthest
+								? distance <= bestDistance
+								: distance >= bestDistance) ||
 						!coneContainsSphere(point, sphere, length, radius)
 					)
 						return;
@@ -440,14 +499,14 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 				if (candidates) {
 					const previousBest = best;
 					best = undefined;
-					bestDistance = math.huge;
+					bestDistance = farthest ? -1 : math.huge;
 					if (previousBest?.Parent) consider(previousBest, previousBest.Size.Magnitude / 2);
 				}
 				if (!candidates) {
 					candidates = radarBuildTargets(this.instance);
 					index = 0;
 					best = undefined;
-					bestDistance = math.huge;
+					bestDistance = farthest ? -1 : math.huge;
 					frame = sectionFrame(this.instance);
 					if (players)
 						for (const player of Players.GetPlayers()) {
@@ -460,7 +519,7 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 				}
 				const start = os.clock();
 				let checked = 0;
-				while (index < candidates.size() && checked++ < 256) {
+				while (index < candidates.size() && !(anyTarget && best) && checked++ < 256) {
 					const model = candidates[index++];
 					const root = model.PrimaryPart;
 					if (model === this.instance || !model.Parent || model.Parent.Name !== "Blocks" || !root?.Parent)
@@ -470,7 +529,7 @@ class RadarSectionLogic extends InstanceBlockLogic<typeof sectionDefinition, rad
 					if (os.clock() - start >= 0.002) break;
 				}
 				if (best || index >= candidates.size()) target = best;
-				if (index >= candidates.size()) candidates = undefined;
+				if ((anyTarget && best) || index >= candidates.size()) candidates = undefined;
 				return candidates !== undefined;
 			}),
 		);
@@ -519,7 +578,7 @@ export const RadarBlocks = [
 		...BlockCreation.defaults,
 		id: "radarsection",
 		displayName: "Radar Section",
-		description: "Returns the position of the closest object in it's field of view",
+		description: "Detects a build or optional player in its cone, with Any/Nearest/Farthest selection.",
 
 		logic: { definition: sectionDefinition, ctor: RadarSectionLogic },
 	},
@@ -527,7 +586,7 @@ export const RadarBlocks = [
 		...BlockCreation.defaults,
 		id: "radialradar",
 		displayName: "Radial Radar",
-		description: "Returns the position of the closest object in it's spherical field of view",
+		description: "Detects a build or optional player in its sphere, with Any/Nearest/Farthest selection.",
 
 		logic: { definition: definitionRadial, ctor: RadialRadarLogic },
 	},

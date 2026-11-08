@@ -223,6 +223,7 @@ export const LogicValueStorages: {
 	bool: NewPrimitiveLogicValueStorage("bool"),
 	key: NewPrimitiveLogicValueStorage("key"),
 	vector3: NewPrimitiveLogicValueStorage("vector3"),
+	matrix3: NewPrimitiveLogicValueStorage("matrix3"),
 	string: NewPrimitiveLogicValueStorage("string"),
 	color: NewPrimitiveLogicValueStorage("color"),
 	byte: NewPrimitiveLogicValueStorage("byte"),

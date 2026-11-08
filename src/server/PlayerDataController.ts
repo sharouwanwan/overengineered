@@ -1,5 +1,6 @@
 import { Component } from "engine/shared/component/Component";
 import { Objects } from "engine/shared/fixes/Objects";
+import { UPDATE_REVISION } from "shared/data/UpdateHistory";
 import type { PlayerDatabase } from "server/database/PlayerDatabase";
 import type { PlayerDatabaseData } from "server/database/PlayerDatabase";
 import type { PlayerDataStorageRemotesPlayer } from "shared/remotes/PlayerDataRemotes";
@@ -31,6 +32,11 @@ export class PlayerDataController extends Component {
 	}
 	private updateData({ key, value }: PlayerUpdateDataRequest): Response {
 		const playerData = this.players.get(this.playerId);
+		if (key === "lastReadUpdate")
+			value = math.max(
+				playerData.data?.lastReadUpdate ?? 0,
+				math.clamp(math.floor(value ?? 0), 0, UPDATE_REVISION),
+			);
 
 		const newPlayerData: PlayerDatabaseData = {
 			...playerData,
