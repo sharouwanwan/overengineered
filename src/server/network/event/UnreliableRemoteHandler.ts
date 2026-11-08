@@ -3,6 +3,7 @@ import { HostedService } from "engine/shared/di/HostedService";
 import { ServerBlockLogic } from "server/blocks/ServerBlockLogic";
 import { CombatDamage } from "server/network/CombatDamage";
 import { CombatHistory } from "server/network/CombatHistory";
+import { attachedBlastParts, tntBlastDistance } from "server/network/TNTBlast";
 import { ServerPartUtils } from "server/plots/ServerPartUtils";
 import { BlockManager } from "shared/building/BlockManager";
 import { RemoteEvents } from "shared/RemoteEvents";
@@ -179,7 +180,22 @@ export class UnreliableRemoteController extends HostedService {
 			radius = math.clamp(radius, 1, 12);
 			pressure = math.clamp(pressure, 0, 2500);
 
+			const sourceRoot = part.AssemblyRootPart ?? part;
+			const attachedCenter = part.Position;
+			const attached = new Set<BasePart>();
 			const hitSet = new Set(Workspace.GetPartBoundsInRadius(center, radius));
+			// The remote can arrive ahead of physics replication. Attached parts and the TNT
+			// still agree in server space, even when the aircraft has already flown past the blast.
+			for (const candidate of attachedBlastParts(
+				Workspace.GetPartBoundsInRadius(attachedCenter, radius),
+				sourceRoot,
+				attachedCenter,
+				radius,
+			)) {
+				if (!BlockManager.isActiveBlockPart(candidate)) continue;
+				attached.add(candidate);
+				hitSet.add(candidate);
+			}
 			if (player && time !== undefined) {
 				const snapshot = history.at(time);
 				if (snapshot)
@@ -203,12 +219,13 @@ export class UnreliableRemoteController extends HostedService {
 			);
 
 			if (isFlammable) {
-				const flameHitParts = Workspace.GetPartBoundsInRadius(center, radius * 1.5);
+				const flameHitParts = new Set(Workspace.GetPartBoundsInRadius(center, radius * 1.5));
+				for (const hit of attached) flameHitParts.add(hit);
 
 				flameHitParts.forEach((part) => {
 					if (
 						BlockManager.isActiveBlockPart(part) &&
-						math.random() < 0.15 * CombatDamage.exposure(center, part, source)
+						math.random() < 0.15 * (attached.has(part) ? 1 : CombatDamage.exposure(center, part, source))
 					) {
 						spreadingFire.burn(part);
 					}
@@ -216,12 +233,12 @@ export class UnreliableRemoteController extends HostedService {
 			}
 
 			const affected = new Set<BasePart>();
-			const damaged = new Set<Model>();
+			const damage = new Map<Model, { part: BasePart; amount: number }>();
 			hitParts.forEach((hit) => {
 				const model = BlockManager.tryGetBlockModelByPart(hit) ?? hit.FindFirstAncestorOfClass("Model");
-				if (!model || model === source || damaged.has(model)) return;
-				damaged.add(model);
-				let distance = math.max(0, hit.Position.sub(center).Magnitude - hit.Size.Magnitude / 2);
+				if (!model || model === source) return;
+				const localCenter = attached.has(hit) ? attachedCenter : center;
+				let distance = tntBlastDistance(hit, localCenter);
 				const pose =
 					time !== undefined && model.PrimaryPart ? history.at(time)?.get(model.PrimaryPart) : undefined;
 				if (pose)
@@ -230,26 +247,28 @@ export class UnreliableRemoteController extends HostedService {
 						math.max(0, pose.frame.Position.sub(center).Magnitude - pose.size.Magnitude / 2),
 					);
 				const falloff = math.clamp(1 - distance / radius, 0, 1);
-				CombatDamage.apply(
-					hit,
-					180 * falloff * (pressure / 2500) * CombatDamage.exposure(center, hit, source),
-					"explosion",
-				);
+				// An internal blast should not be shielded by another piece of its own aircraft.
+				const exposure = attached.has(hit) ? 1 : CombatDamage.exposure(center, hit, source);
+				const amount = 180 * falloff * (pressure / 2500) * exposure;
+				if (amount > (damage.get(model)?.amount ?? 0)) damage.set(model, { part: hit, amount });
 			});
+			for (const [, hit] of damage) CombatDamage.apply(hit.part, hit.amount, "explosion");
 			hitParts.forEach((part) => {
 				if (!BlockManager.isActiveBlockPart(part)) return;
 				const root = part.AssemblyRootPart ?? part;
 				if (!root.Anchored && !affected.has(root)) {
 					affected.add(root);
-					const offset = root.AssemblyCenterOfMass.sub(center);
+					const localCenter = attached.has(part) ? attachedCenter : center;
+					const offset = root.AssemblyCenterOfMass.sub(localCenter);
 					const direction = offset.Magnitude > 0.001 ? offset.Unit : Vector3.yAxis;
 					const owner = root.GetNetworkOwner();
 					const canOwn = root.CanSetNetworkOwnership()[0];
 					if (canOwn) root.SetNetworkOwner(undefined);
-					const falloff = math.clamp(1 - part.Position.sub(center).Magnitude / math.max(radius, 0.001), 0, 1);
+					const falloff = math.clamp(1 - tntBlastDistance(part, localCenter) / math.max(radius, 0.001), 0, 1);
 					const budget = impulseBudget.get(root) ?? { at: os.clock(), used: 0 };
 					const deltaSpeed = math.min(
-						(pressure * falloff * CombatDamage.exposure(center, part, source)) / 40,
+						(pressure * falloff * (attached.has(part) ? 1 : CombatDamage.exposure(center, part, source))) /
+							40,
 						math.max(0, 62.5 - budget.used),
 					);
 					budget.used += deltaSpeed;
@@ -270,6 +289,9 @@ export class UnreliableRemoteController extends HostedService {
 			});
 
 			part.Transparency = 1;
+			part.CanCollide = false;
+			part.CanTouch = false;
+			part.CanQuery = false;
 			PartUtils.applyToAllDescendantsOfType("Decal", part, (decal) => decal.Destroy());
 
 			// Explosion sound

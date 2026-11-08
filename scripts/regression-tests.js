@@ -709,3 +709,20 @@ sectionLogic.change({maxDistance:200,coneAngle:30,detectionSize:1});sectionLogic
 console.log('Any/Nearest/Farthest ordering and actual Section range-feedback loop passed.');
 
 require("./radar-feedback-tests.js");
+
+// Fast attached vehicles must be tested in the TNT's replicated frame, not ahead of the aircraft.
+class BlastVector extends RadialVector {
+ mul(n){return new BlastVector(this.X*n,this.Y*n,this.Z*n);}
+}
+const blastMath=load('src/server/network/TNTBlast.ts',{}, {Vector3:BlastVector,math:{max:Math.max,abs:Math.abs}});
+const aircraftRoot={},foreignRoot={};
+const blastPart=(x,y,z,root)=>({AssemblyRootPart:root,Size:new BlastVector(2,2,2),CFrame:{PointToObjectSpace:p=>new BlastVector(p.X-x,p.Y-y,p.Z-z)}});
+const wing=blastPart(4,0,0,aircraftRoot),foreignBlastPart=blastPart(4,0,0,foreignRoot),outside=blastPart(20,0,0,aircraftRoot);
+const serverBlast=new BlastVector(0,0,0),clientBlast=new BlastVector(60,0,0);
+assert.ok(blastMath.tntBlastDistance(wing,clientBlast)>12);
+assert.equal(blastMath.tntBlastDistance(wing,serverBlast),3);
+assert.deepEqual([...blastMath.attachedBlastParts([wing,foreignBlastPart,outside],aircraftRoot,serverBlast,12)],[wing]);
+assert.equal(blastMath.tntBlastDistance(blastPart(0,0,0,aircraftRoot),serverBlast),0);
+assert.equal(blastMath.tntBlastDistance(blastPart(13,0,0,aircraftRoot),serverBlast),12);
+assert.ok(blastMath.tntBlastDistance(blastPart(12,12,0,aircraftRoot),serverBlast)>12);
+console.log('TNT moving-assembly compensation, foreign-assembly isolation and surface-distance boundaries passed.');
