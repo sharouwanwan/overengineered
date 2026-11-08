@@ -17,6 +17,7 @@ import { ConfigControlSound } from "client/gui/configControls/ConfigControlSound
 import { ConfigControlString } from "client/gui/configControls/ConfigControlString";
 import { ConfigControlSwitch } from "client/gui/configControls/ConfigControlSwitch";
 import { ConfigControlVector3 } from "client/gui/configControls/ConfigControlVector3";
+import { sameOrUndefined, sameOrUndefinedBy, map } from "client/gui/configControls/ConfigSelection";
 import { ByteEditor } from "client/gui/controls/ByteEditorControl";
 import { CheckBoxControl } from "client/gui/controls/CheckBoxControl";
 import { DropdownList } from "client/gui/controls/DropdownList";
@@ -90,50 +91,6 @@ type ControlConfigParts<TKey extends PrimitiveKeys> = OfBlocks<ControlConfigPart
 type TypedConfigPart<K extends PrimitiveKeys = PrimitiveKeys> = BlockConfigPart<K>;
 type BlocksConfigPart<K extends PrimitiveKeys = PrimitiveKeys> = OfBlocks<TypedConfigPart<K>>;
 type BlocksConfig = OfBlocks<{ readonly [k in string]: TypedConfigPart }>;
-
-/** Return the value if all of them are the same; Returns undefined otherwise */
-const sameOrUndefined = <T>(configs: OfBlocks<T>, comparer?: (left: T, right: T) => boolean) => {
-	let value: T | undefined;
-	for (const [_, config] of pairs(configs)) {
-		if (value !== undefined && !(comparer?.(value, config) ?? value === config)) {
-			value = undefined;
-			break;
-		}
-
-		value = config;
-	}
-
-	return value;
-};
-const sameOrUndefinedBy = <T, U>(config: OfBlocks<T>, func: (value: T) => U) => {
-	if (Objects.size(config) === 1) {
-		const first = firstValue(config)!;
-		return func(first);
-	}
-
-	const mapped: Writable<OfBlocks<U>> = {};
-	for (const [uuid, v] of pairs(config)) {
-		const value = func(v);
-		if (value === undefined) {
-			return undefined;
-		}
-
-		mapped[uuid] = value;
-	}
-
-	const same = sameOrUndefined(mapped);
-	return same;
-};
-
-/** Map the config values, leaving the keys as is */
-const map = <T, TOut extends defined>(
-	configs: OfBlocks<T>,
-	mapfunc: (value: T, key: BlockUuid) => TOut,
-): OfBlocks<TOut> => {
-	return asObject(asMap(configs).mapToMap((k, v) => $tuple(k, mapfunc(v, k))));
-};
-
-//
 
 const template = Interface.getInterface<{
 	Main: { Left: { Config: { Content: { ScrollingFrame: { Template: ConfigValueWrapperDefinition } } } } };

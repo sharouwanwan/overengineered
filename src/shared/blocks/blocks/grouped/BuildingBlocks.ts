@@ -290,11 +290,11 @@ const cones: BlockBuildersWithoutIdAndDefaults = {
 		description: "Finally, ice cream jokes are on the menu",
 	},
 	hollowconehalf: {
-		displayName: "Hollow Cone Half",
+		displayName: "Hollow Half Cone",
 		description: "Half of something useful",
 	},
 	hollowconequarter: {
-		displayName: "Hollow Cone Quarter",
+		displayName: "Hollow Quarter Cone",
 		description: "Quarter of something useful",
 		mirror: { behaviour: "cornerwedge" },
 	},
@@ -345,12 +345,12 @@ const cylinders: BlockBuildersWithoutIdAndDefaults = {
 		search: { partialAliases: ["tube", "pipe"] },
 	},
 	hollowcylinderhalf: {
-		displayName: "Hollow Cylinder Half",
+		displayName: "Hollow Half Cylinder",
 		description: "Almost a complicated cylinder",
 		search: { partialAliases: ["tube", "pipe"] },
 	},
 	hollowcylinderquarter: {
-		displayName: "Hollow Cylinder Quarter",
+		displayName: "Hollow Quarter Cylinder",
 		description: "Not really a complicated cylinder",
 		mirror: { behaviour: "hcylquart" },
 		search: { partialAliases: ["tube", "pipe"] },
@@ -366,7 +366,7 @@ const cylinders: BlockBuildersWithoutIdAndDefaults = {
 		search: { partialAliases: ["tube", "pipe"] },
 	},
 	hollowcylinder90verticalhalf: {
-		displayName: "Vertical Half Hollow Cylinder (90 degrees)",
+		displayName: "Hollow Vertical Half Cylinder (90 degrees)",
 		description: "A vertical half of a bended hollow tube",
 		search: { partialAliases: ["tube", "pipe", "macaroni"] },
 		mirror: { behaviour: "hcylvertical" },
@@ -378,7 +378,7 @@ const cylinders: BlockBuildersWithoutIdAndDefaults = {
 		mirror: { behaviour: "hcylvertical" },
 	},
 	hollowcylinder90horizontalhalf: {
-		displayName: "Horizontal Half Hollow Cylinder (90 degrees)",
+		displayName: "Hollow Horizontal Half Cylinder (90 degrees)",
 		description: "A horizontal half of a bended hollow tube",
 		search: { partialAliases: ["tube", "pipe", "macaroni"] },
 		mirror: { behaviour: "hcylvertical" },
@@ -391,7 +391,7 @@ const cylinders: BlockBuildersWithoutIdAndDefaults = {
 	},
 
 	hollowcylinderbig90: {
-		displayName: "Big Hollow Cylinder (90 degrees)",
+		displayName: "Hollow Big Cylinder (90 degrees)",
 		description: "A beeg bended hollow tube for all your sewer needs",
 		search: { partialAliases: ["tube", "pipe", "macaroni"] },
 	},
@@ -401,7 +401,7 @@ const cylinders: BlockBuildersWithoutIdAndDefaults = {
 		search: { partialAliases: ["tube", "pipe", "macaroni"] },
 	},
 	hollowcylinderbig90verticalhalf: {
-		displayName: "Vertical Half Big Hollow Cylinder (90 degrees)",
+		displayName: "Hollow Big Vertical Half Cylinder (90 degrees)",
 		description: "A big vertical half of a bended hollow tube",
 		search: { partialAliases: ["tube", "pipe", "macaroni"] },
 		mirror: { behaviour: "hcylvertical" },
@@ -413,7 +413,7 @@ const cylinders: BlockBuildersWithoutIdAndDefaults = {
 		mirror: { behaviour: "hcylvertical" },
 	},
 	hollowcylinderbig90horizontalhalf: {
-		displayName: "Horizontal Half Big Hollow Cylinder (90 degrees)",
+		displayName: "Hollow Big Horizontal Half Cylinder (90 degrees)",
 		description: "A big horizontal half of a bended hollow tube",
 		search: { partialAliases: ["tube", "pipe", "macaroni"] },
 		mirror: { behaviour: "hcylvertical" },

@@ -297,8 +297,8 @@ if (fastunload) {
 		const endZ = startZ + chunkSize - 1;
 
 		const region = new Region3(
-			new Vector3(startX * 4, -300, startZ * 4),
-			new Vector3(endX * 4 + 4, 500, endZ * 4 + 4),
+			new Vector3(startX * 4, -300 + GameDefinitions.HEIGHT_OFFSET, startZ * 4),
+			new Vector3(endX * 4 + 4, 500 + GameDefinitions.HEIGHT_OFFSET, endZ * 4 + 4),
 		);
 
 		if (math.min(region.Size.X, region.Size.Y, region.Size.Z) <= 0) {

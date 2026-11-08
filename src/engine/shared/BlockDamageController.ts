@@ -129,7 +129,12 @@ export class BlockDamageController extends HostedService {
 		const properties = new PhysicalProperties(material);
 
 		blockMaterialProperties.set(block, properties);
-		block.DescendantRemoving.Once(() => blockMaterialProperties.delete(block));
+		block.Destroying.Once(() => {
+			blockMaterialProperties.delete(block);
+			blockHealthList.delete(block);
+			blockMaxHealthList.delete(block);
+			this.igniteBlocks.delete(block);
+		});
 
 		// get smallest because it doesn't make sense for a giant
 		// metal sheet to have 50k hp

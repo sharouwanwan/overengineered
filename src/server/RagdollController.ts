@@ -73,136 +73,107 @@ namespace RagdollModule {
 		},
 	};
 
+	type Rig = {
+		motors: Map<Motor6D, { socket: BallSocketConstraint; collision: NoCollisionConstraint }>;
+		animationJoints: Map<AnimationConstraint, boolean>;
+		collisions: Map<BasePart, boolean>;
+		connections: RBXScriptConnection[];
+	};
+	const rigs = new Map<Model, Rig>();
 	export function createJoints(character: Model) {
-		const constraintsFolder = new Instance("Folder", character);
-		constraintsFolder.Name = "ConstraintsFolder";
-
+		if (rigs.has(character)) return;
 		const humanoid = character.WaitForChild("Humanoid") as Humanoid;
 		humanoid.BreakJointsOnDeath = false;
-
-		if (humanoid.RigType === Enum.HumanoidRigType.R6) {
-			for (const [, joint] of pairs(character.GetDescendants())) {
-				if (!joint.IsA("Motor6D")) continue;
-				assert(joint.Part0);
-				assert(joint.Part1);
-
-				if (joint.Name === "RootJoint") {
-					const rootHinge = new Instance("HingeConstraint");
-					rootHinge.Name = "RootHinge";
-					rootHinge.LimitsEnabled = true;
-					rootHinge.LowerAngle = 0;
-					rootHinge.UpperAngle = 0;
-
-					const att0 = new Instance("Attachment", joint.Part1);
-					att0.Name = "RootAttachment0";
-					const att1 = new Instance("Attachment", joint.Part0);
-					att1.Name = "RootAttachment1";
-
-					rootHinge.Attachment0 = att0;
-					rootHinge.Attachment1 = att1;
-					rootHinge.Parent = constraintsFolder;
-				} else {
-					const ballSocket = new Instance("BallSocketConstraint");
-					ballSocket.Name = joint.Name + " Socket";
-					ballSocket.Enabled = true;
-					ballSocket.LimitsEnabled = true;
-					ballSocket.TwistLimitsEnabled = true;
-
-					let jointName: string;
-					if (string.find(joint.Name, "Right ")[0]) {
-						jointName = string.split(joint.Name, "Right ")[1];
-					} else if (string.find(joint.Name, "Left ")[0]) {
-						jointName = string.split(joint.Name, "Left ")[1];
-					} else {
-						jointName = joint.Name;
-					}
-
-					const jointConfig = r6ConstraintsConfig[jointName];
-					ballSocket.UpperAngle = jointConfig.UpperAngle;
-					ballSocket.TwistLowerAngle = jointConfig.TwistLowerAngle;
-					ballSocket.TwistUpperAngle = jointConfig.TwistUpperAngle;
-
-					const att0 = new Instance("Attachment", joint.Part0);
-					att0.Name = joint.Part1.Name + " Attachment0";
-					att0.CFrame = joint.C0;
-
-					const att1 = new Instance("Attachment", joint.Part1);
-					att1.Name = joint.Part1.Name + " Attachment1";
-					att1.CFrame = joint.C1;
-
-					ballSocket.Attachment0 = att0;
-					ballSocket.Attachment1 = att1;
-
-					ballSocket.Parent = constraintsFolder;
-				}
+		humanoid.RequiresNeck = false;
+		const folder = new Instance("Folder");
+		folder.Name = "ConstraintsFolder";
+		folder.Parent = character;
+		const rig: Rig = { motors: new Map(), animationJoints: new Map(), collisions: new Map(), connections: [] };
+		rigs.set(character, rig);
+		const add = (joint: Instance) => {
+			if (!joint.IsA("Motor6D") || rig.motors.has(joint) || !joint.Part0 || !joint.Part1) return;
+			const root = joint.Name === "Root" || joint.Name === "RootJoint";
+			const name = joint.Name.gsub("^Right%s*", "")[0].gsub("^Left%s*", "")[0];
+			const config = (humanoid.RigType === Enum.HumanoidRigType.R6 ? r6ConstraintsConfig : r15ConstraintsConfig)[
+				name
+			];
+			if (!root && !config) return;
+			const att0 = new Instance("Attachment", joint.Part0);
+			att0.CFrame = joint.C0;
+			const att1 = new Instance("Attachment", joint.Part1);
+			att1.CFrame = joint.C1;
+			const socket = new Instance("BallSocketConstraint");
+			socket.Name = joint.Name + " Ragdoll";
+			socket.Attachment0 = att0;
+			socket.Attachment1 = att1;
+			socket.LimitsEnabled = true;
+			socket.TwistLimitsEnabled = true;
+			socket.UpperAngle = root ? 0 : config.UpperAngle;
+			socket.TwistLowerAngle = root ? 0 : config.TwistLowerAngle;
+			socket.TwistUpperAngle = root ? 0 : config.TwistUpperAngle;
+			socket.Enabled = false;
+			socket.Parent = folder;
+			const collision = new Instance("NoCollisionConstraint");
+			collision.Part0 = joint.Part0;
+			collision.Part1 = joint.Part1;
+			collision.Enabled = false;
+			collision.Parent = folder;
+			rig.motors.set(joint, { socket, collision });
+			toggleJoints(character, !SharedRagdoll.isPlayerRagdolling(humanoid));
+		};
+		const watch = (instance: Instance) => {
+			// Upgraded avatars already include sockets and collision constraints. Release
+			// their animation drivers instead of creating a second set of physical joints.
+			if (instance.IsA("AnimationConstraint")) {
+				if (instance.Name === "Root" || instance.Name === "RootJoint") return;
+				rig.animationJoints.set(instance, instance.Enabled);
+				toggleJoints(character, !SharedRagdoll.isPlayerRagdolling(humanoid));
+				return;
 			}
-		} else if (humanoid.RigType === Enum.HumanoidRigType.R15) {
-			delay(0.25, () => {
-				// small delay for attachments fix
-
-				for (const [, joint] of pairs(character.GetDescendants())) {
-					if (!joint.IsA("Motor6D")) continue;
-					assert(joint.Part0);
-					assert(joint.Part1);
-
-					if (joint.Name === "Root") {
-						const rootHinge = new Instance("HingeConstraint", constraintsFolder);
-						rootHinge.Name = "RootHinge";
-						rootHinge.LimitsEnabled = true;
-						rootHinge.LowerAngle = 0;
-						rootHinge.UpperAngle = 0;
-
-						const att0 = new Instance("Attachment", character.WaitForChild("UpperTorso"));
-						att0.Name = "RootAttachment0";
-						const att1 = new Instance("Attachment", joint.Part0);
-						att1.Name = "RootAttachment1";
-
-						rootHinge.Attachment0 = att0;
-						rootHinge.Attachment1 = att1;
-					} else {
-						const ballSocket = new Instance("BallSocketConstraint", constraintsFolder);
-						ballSocket.Name = joint.Name + " Socket";
-						ballSocket.Enabled = true;
-						ballSocket.LimitsEnabled = true;
-						ballSocket.TwistLimitsEnabled = true;
-
-						let jointName;
-						if (string.find(joint.Name, "Right")[0]) {
-							jointName = string.split(joint.Name, "Right")[1];
-						} else if (string.find(joint.Name, "Left")[0]) {
-							jointName = string.split(joint.Name, "Left")[1];
-						} else {
-							jointName = joint.Name;
-						}
-
-						const jointConfig = r15ConstraintsConfig[jointName];
-						ballSocket.UpperAngle = jointConfig.UpperAngle;
-						ballSocket.TwistLowerAngle = jointConfig.TwistLowerAngle;
-						ballSocket.TwistUpperAngle = jointConfig.TwistUpperAngle;
-
-						const att0 = new Instance("Attachment", joint.Part0);
-						att0.Name = joint.Part1.Name + " Attachment0";
-						att0.CFrame = joint.C0;
-
-						const att1 = new Instance("Attachment", joint.Part1);
-						att1.Name = joint.Part1.Name + " Attachment1";
-						att1.CFrame = joint.C1;
-
-						ballSocket.Attachment0 = att0;
-						ballSocket.Attachment1 = att1;
-					}
-				}
-
-				humanoid.RootPart!.CanCollide = false;
-				(character.WaitForChild("Head") as BasePart).CanCollide = true;
-			});
-		}
+			if (!instance.IsA("Motor6D")) return;
+			add(instance);
+			rig.connections.push(instance.GetPropertyChangedSignal("Part0").Connect(() => add(instance)));
+			rig.connections.push(instance.GetPropertyChangedSignal("Part1").Connect(() => add(instance)));
+		};
+		rig.connections.push(character.DescendantAdded.Connect(watch));
+		for (const instance of character.GetDescendants()) watch(instance);
+		character.Destroying.Once(() => {
+			for (const connection of rig.connections) connection.Disconnect();
+			rigs.delete(character);
+		});
 	}
-
-	export function toggleJoints(character: Model, toggle: boolean) {
-		for (const [, joint] of pairs(character.GetDescendants())) {
-			if (!joint.IsA("Motor6D")) continue;
-			joint.Enabled = toggle;
+	export function toggleJoints(character: Model, enabled: boolean) {
+		const rig = rigs.get(character);
+		if (!rig) return;
+		const root = character.FindFirstChild("HumanoidRootPart");
+		if (!enabled && root?.IsA("BasePart")) {
+			if (!rig.collisions.has(root)) rig.collisions.set(root, root.CanCollide);
+			root.CanCollide = false;
+		}
+		for (const [motor, constraint] of rig.motors) {
+			if (!motor.Parent) continue;
+			motor.Enabled = enabled;
+			constraint.socket.Enabled = !enabled;
+			constraint.collision.Enabled = !enabled;
+			const limb = motor.Part1;
+			if (!limb) continue;
+			if (!enabled) {
+				if (!rig.collisions.has(limb)) rig.collisions.set(limb, limb.CanCollide);
+				limb.CanCollide = limb.Name !== "HumanoidRootPart";
+			}
+		}
+		for (const [joint, wasEnabled] of rig.animationJoints) {
+			if (!joint.Parent) continue;
+			joint.Enabled = enabled && wasEnabled;
+			const limb = joint.Part1;
+			if (!enabled && limb) {
+				if (!rig.collisions.has(limb)) rig.collisions.set(limb, limb.CanCollide);
+				limb.CanCollide = limb.Name !== "HumanoidRootPart";
+			}
+		}
+		if (enabled) {
+			for (const [part, collidable] of rig.collisions) if (part.Parent) part.CanCollide = collidable;
+			rig.collisions.clear();
 		}
 	}
 }
@@ -252,6 +223,7 @@ function initSounds(): RBXScriptConnection {
 function initRagdollMain(): RBXScriptConnection {
 	return PlayerWatcher.onHumanoidAdded((humanoid, character, player) => {
 		humanoid.BreakJointsOnDeath = false;
+		humanoid.RequiresNeck = false;
 
 		RagdollModule.createJoints(character);
 		setPlayerRagdoll(humanoid, false);
@@ -283,7 +255,7 @@ export class RagdollController extends HostedService {
 		this.event.subscribeRegistration(initSounds);
 		this.event.subscribe(SharedRagdoll.event.invoked, (player, ragdoll) => {
 			const humanoid = player.Character?.FindFirstChild("Humanoid") as Humanoid | undefined;
-			if (!humanoid || humanoid.Sit) return;
+			if (!humanoid || humanoid.Sit || humanoid.Health <= 0) return;
 
 			setPlayerRagdoll(humanoid, ragdoll);
 		});

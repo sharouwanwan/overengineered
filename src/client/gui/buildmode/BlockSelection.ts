@@ -1,5 +1,6 @@
-import { ContentProvider, GuiService, Players, PolicyService, RunService } from "@rbxts/services";
+import { GuiService, Players, PolicyService, RunService } from "@rbxts/services";
 import { BlockPreviewControl } from "client/gui/buildmode/BlockPreviewControl";
+import { normalizeBlockSearch, blockSearchScore } from "client/gui/buildmode/BlockSearch";
 import { BlockPipetteButton } from "client/gui/controls/BlockPipetteButton";
 import { GuiAnimator } from "client/gui/GuiAnimator";
 import { AlertPopup } from "client/gui/popup/AlertPopup";
@@ -205,6 +206,9 @@ export class BlockSelectionControl extends Control<BlockSelectionControlDefiniti
 	private readonly breadcrumbs;
 
 	private readonly searchCache;
+	private searchGeneration = 0;
+	private readonly blockCounts = new Map<BlockId, number>();
+	private readonly countsRevision = new ObservableValue(0);
 
 	constructor(
 		template: BlockSelectionControlDefinition,
@@ -224,10 +228,13 @@ export class BlockSelectionControl extends Control<BlockSelectionControlDefiniti
 					block.displayName,
 				).fullLower();
 
-				return {
-					exact: [block.id, ...(block.search?.aliases ?? []), displayNameLower, translatedLower],
-					fuzzy: [...(block.search?.partialAliases ?? []), displayNameLower, translatedLower],
-				};
+				return [
+					block.id,
+					...(block.search?.aliases ?? []),
+					...(block.search?.partialAliases ?? []),
+					displayNameLower,
+					translatedLower,
+				].map(normalizeBlockSearch);
 			};
 
 			return asObject(asMap(blockList.blocks).mapToMap((k, v) => $tuple(k, generate(v))));
@@ -262,18 +269,38 @@ export class BlockSelectionControl extends Control<BlockSelectionControlDefiniti
 
 		this.event.subscribeObservable(this.highlightedBlocks, () => this.create(this.selectedCategory.get(), false));
 
-		// might be useful
-		// const searchText = this.event.observableFromGuiParam(this.gui.SearchTextBox, "Text");
+		const refreshCounts = () => {
+			this.blockCounts.clear();
+			for (const block of this.plot.getBlocks()) {
+				const id = BlockManager.manager.id.get(block);
+				this.blockCounts.set(id, (this.blockCounts.get(id) ?? 0) + 1);
+			}
+			this.countsRevision.set(this.countsRevision.get() + 1);
+		};
+		this.onDestroy(() => this.countsRevision.destroy());
+		this.onEnable(refreshCounts);
+		this.event.subscribe(this.plot.instance.ChildAdded, refreshCounts);
+		this.event.subscribe(this.plot.instance.ChildRemoved, refreshCounts);
+		this.onDisable(() => this.searchGeneration++);
 		this.event.subscribe(this.gui.Content.SearchTextBox.GetPropertyChangedSignal("Text"), () => {
-			this.selectedCategory.set([]);
-			this.selectedBlock.set(undefined);
-
-			this.create([], false);
+			const generation = ++this.searchGeneration;
+			task.delay(0.12, () => {
+				if (generation !== this.searchGeneration || !this.isEnabled()) return;
+				this.selectedBlock.set(undefined);
+				if (this.selectedCategory.get().size() !== 0) this.selectedCategory.set([]);
+				else this.create([], false);
+			});
 		});
 	}
 
 	private adsAllowed?: boolean;
 	private create(selectedCategory: BlockCategoryPath, animated: boolean) {
+		this.searchGeneration++;
+		this.blockCounts.clear();
+		for (const block of this.plot.getBlocks()) {
+			const id = BlockManager.manager.id.get(block);
+			this.blockCounts.set(id, (this.blockCounts.get(id) ?? 0) + 1);
+		}
 		const highlightButton = (control: InstanceComponent<Instance>) => {
 			const button = Interface.getTemplates<{ Highlight: GuiObject }>().Highlight.Clone();
 			ServiceIntegrityChecker.whitelistInstance(button);
@@ -322,8 +349,6 @@ export class BlockSelectionControl extends Control<BlockSelectionControlDefiniti
 			).sort((l, r) => l.model.Name > r.model.Name);
 			const models = blocks.map((b) => b.model);
 
-			task.spawn(() => ContentProvider.PreloadAsync(models));
-
 			const control = new CategoryControl(this.categoryTemplate(), category[category.size() - 1], models);
 			control.activated.Connect(activated);
 			this.list.add(control);
@@ -344,12 +369,10 @@ export class BlockSelectionControl extends Control<BlockSelectionControlDefiniti
 			this.list.add(control);
 
 			const upd = () => {
-				const count = this.plot.getBlocks().count((c) => BlockManager.manager.id.get(c) === block.id);
+				const count = this.blockCounts.get(block.id) ?? 0;
 				gui.CountText.Text = tostring(`${count}/${block.limit}`);
 			};
-			control.event.subscribe(this.plot.instance.ChildAdded, upd);
-			control.event.subscribe(this.plot.instance.ChildRemoved, upd);
-			upd();
+			control.event.subscribeObservable(this.countsRevision, upd, true);
 
 			control.instance.LayoutOrder = idx++;
 			return control;
@@ -405,7 +428,8 @@ export class BlockSelectionControl extends Control<BlockSelectionControlDefiniti
 		// Block buttons
 		let prev: BlockControl | CategoryControl | undefined;
 
-		const lowerSearch = this.gui.Content.SearchTextBox.Text.fullLower();
+		const lowerSearch = normalizeBlockSearch(this.gui.Content.SearchTextBox.Text);
+		const searchTokens = lowerSearch.split(" ").filter((token) => token !== "");
 
 		const processBlock = (block: Block) => {
 			if (block.hidden) return;
@@ -474,27 +498,16 @@ export class BlockSelectionControl extends Control<BlockSelectionControlDefiniti
 				processBlock(block);
 			}
 		} else {
-			const similar1: Block[] = [];
-			const similar2: Block[] = [];
-
-			for (const block of this.blockList.sorted) {
-				const cache = this.searchCache[block.id];
-
-				if (cache.exact.find((e) => e === lowerSearch) !== undefined) {
-					processBlock(block);
-				} else if (cache.fuzzy.any((f) => f.startsWith(lowerSearch))) {
-					similar1.push(block);
-				} else if (cache.fuzzy.any((f) => f.contains(lowerSearch))) {
-					similar2.push(block);
+			const matches: { block: Block; score: number }[] = [];
+			if (lowerSearch !== "")
+				for (const block of this.blockList.sorted) {
+					const score = blockSearchScore(this.searchCache[block.id], lowerSearch, searchTokens);
+					if (score !== undefined) matches.push({ block, score });
 				}
-			}
-
-			for (const block of similar1) {
-				processBlock(block);
-			}
-			for (const block of similar2) {
-				processBlock(block);
-			}
+			matches.sort((a, b) =>
+				a.score === b.score ? a.block.displayName < b.block.displayName : a.score < b.score,
+			);
+			for (const match of matches) processBlock(match.block);
 		}
 
 		if (this.gui.Content.SearchTextBox.Text === "") {
@@ -518,7 +531,7 @@ export class BlockSelectionControl extends Control<BlockSelectionControlDefiniti
 
 		// Gamepad selection improvements
 		const isSelected = GuiService.SelectedObject !== undefined;
-		GuiService.SelectedObject = isSelected ? this.list.getAll()[0].instance : undefined;
+		GuiService.SelectedObject = isSelected ? this.list.getAll()[0]?.instance : undefined;
 		this.gui.Content.ScrollingFrame.CanvasPosition = Vector2.zero;
 
 		if (animated && this.gui.Content.SearchTextBox.Text === "") {

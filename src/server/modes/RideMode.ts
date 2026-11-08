@@ -119,8 +119,9 @@ export class RideMode implements PlayModeBase {
 			}
 		}
 
+		const assigned = new Set<BasePart>();
 		for (const block of blocksChildren) {
-			ServerPartUtils.switchDescendantsNetworkOwner(block, player);
+			ServerPartUtils.switchDescendantsNetworkOwner(block, player, assigned);
 		}
 
 		// TODO: move this somewhere

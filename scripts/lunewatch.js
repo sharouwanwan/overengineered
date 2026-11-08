@@ -7,9 +7,21 @@ let fileCreated = false;
 /** @type {import('chokidar').FSWatcher | null} */
 let watcher = undefined;
 
+let running = false;
+let pending = false;
 function runCommand() {
-	console.log("[watcher] Detected change. Running: lune run savechanges");
-	exec("lune run savechanges", (error, stdout, stderr) => {
+	if (running) {
+		pending = true;
+		return;
+	}
+	running = true;
+	console.log("[watcher] Detected change. Running: node scripts/save-assets.js");
+	exec("node scripts/save-assets.js", (error, stdout, stderr) => {
+		running = false;
+		if (pending) {
+			pending = false;
+			runCommand();
+		}
 		if (error) {
 			console.error(`[watcher] Error: ${error.message}`);
 			return;
@@ -26,6 +38,7 @@ function startWatching() {
 	watcher = chokidar.watch(path, {
 		persistent: true,
 		ignoreInitial: true,
+		awaitWriteFinish: { stabilityThreshold: 1000, pollInterval: 100 },
 	});
 
 	watcher.on("change", () => {

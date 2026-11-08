@@ -1,3 +1,4 @@
+import { RunService, Workspace } from "@rbxts/services";
 import { InstanceBlockLogic as InstanceBlockLogic } from "shared/blockLogic/BlockLogic";
 import { BlockCreation } from "shared/blocks/BlockCreation";
 import { RemoteEvents } from "shared/RemoteEvents";
@@ -86,15 +87,62 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 		const flammable = this.initializeInputCache("flammable");
 		const impact = this.initializeInputCache("impact");
 
-		const explodeTNT = () => {
-			RemoteEvents.Explode.send({
+		let pendingUntil = 0;
+		let resend: (() => void) | undefined;
+		let retries = 0;
+		let retryAt = 0;
+		this.onDisable(() => {
+			resend = undefined;
+		});
+		const explodeTNT = (position = mainPart.Position) => {
+			if (mainPart.GetAttribute("ExplosionDetonated") === true || os.clock() < pendingUntil) return;
+			pendingUntil = os.clock() + 0.5;
+			const request = {
 				part: mainPart,
+				position,
+				time: Workspace.GetServerTimeNow(),
 				radius: radius.get(),
 				pressure: pressure.get(),
 				isFlammable: flammable.get(),
-			});
-			this.disable();
+			};
+			RemoteEvents.Explode.send(request);
+			resend = () => RemoteEvents.Explode.send(request);
+			retries = 2;
+			retryAt = os.clock() + 0.1;
 		};
+		this.event.subscribe(mainPart.GetAttributeChangedSignal("ExplosionDetonated"), () => {
+			if (mainPart.GetAttribute("ExplosionDetonated") === true) this.disable();
+		});
+
+		let previousPosition = mainPart.Position;
+		const sweep = new RaycastParams();
+		sweep.FilterType = Enum.RaycastFilterType.Exclude;
+		sweep.FilterDescendantsInstances = [this.instance.Parent ?? this.instance];
+		sweep.RespectCanCollide = true;
+		this.event.subscribe(RunService.Heartbeat, () => {
+			if (resend && os.clock() >= retryAt) {
+				resend();
+				if (--retries <= 0) resend = undefined;
+				retryAt = os.clock() + 0.1;
+			}
+			const position = mainPart.Position;
+			const travel = position.sub(previousPosition);
+			if (
+				impact.get() &&
+				mainPart.GetAttribute("ExplosionDetonated") !== true &&
+				travel.Magnitude > 0.01 &&
+				mainPart.AssemblyLinearVelocity.Magnitude > 10
+			) {
+				const hit = Workspace.Spherecast(
+					previousPosition,
+					math.max(0.1, math.min(mainPart.Size.X, mainPart.Size.Y, mainPart.Size.Z) / 2),
+					travel,
+					sweep,
+				);
+				if (hit) explodeTNT(previousPosition.add(travel.Unit.mul(hit.Distance)));
+			}
+			previousPosition = position;
+		});
 
 		this.on(({ explode }) => {
 			if (!explode) return;
@@ -104,10 +152,11 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 		this.event.subscribe(mainPart.Touched, (part) => {
 			if (!impact.get()) return;
 
-			const velocity1 = mainPart.AssemblyLinearVelocity.Magnitude;
-			const velocity2 = part.AssemblyLinearVelocity.Magnitude;
-
-			if (velocity1 > (velocity2 + 1) * 10) explodeTNT();
+			if (!part.CanCollide || part.AssemblyRootPart === mainPart.AssemblyRootPart) return;
+			const relativeSpeed = mainPart
+				.GetVelocityAtPosition(mainPart.Position)
+				.sub(part.GetVelocityAtPosition(mainPart.Position)).Magnitude;
+			if (relativeSpeed > 10) explodeTNT();
 		});
 	}
 }

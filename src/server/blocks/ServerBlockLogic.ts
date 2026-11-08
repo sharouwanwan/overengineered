@@ -32,8 +32,8 @@ export abstract class ServerBlockLogic<T extends GenericBlockLogicCtor> {
 				const plot = SharedPlots.staticTryGetPlotByOwnerID(player.UserId);
 				if (!plot) return "No plot";
 
-				if (!block?.Anchored && !block?.AssemblyRootPart?.Anchored && !block.IsDescendantOf(plot)) {
-					return "Block anchored";
+				if (!block.IsDescendantOf(plot)) {
+					return "Block belongs to another plot";
 				}
 			}
 		}

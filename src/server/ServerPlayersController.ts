@@ -73,15 +73,6 @@ export class ServerPlayersController extends HostedService {
 
 						plot = sharedPlots.plots.find((p) => p.ownerId.get() === undefined);
 						if (!plot) {
-							task.spawn(() => {
-								while (true as boolean) {
-									task.wait();
-									for (const player of Players.GetPlayers()) {
-										player.Kick("Updating the game...");
-									}
-								}
-							});
-
 							return { success: false, message: "No free plot found, try again later." };
 						}
 					}

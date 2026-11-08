@@ -6,6 +6,7 @@ ReplicatedStorage.WaitForChild("Assets");
 
 type Args = {
 	readonly part: BasePart;
+	readonly position?: Vector3;
 	readonly index?: number;
 };
 @injectable
@@ -13,11 +14,24 @@ export class ExplosionEffect extends EffectBase<Args> {
 	readonly soundsFolder = ReplicatedStorage.Assets.Sounds.Explosion.GetChildren();
 
 	constructor(@inject creator: EffectCreator) {
-		super(creator, "explosion_effect");
+		super(creator, "explosion_effect", "RemoteEvent");
 	}
 
-	override justRun({ part, index }: Args): void {
+	override justRun({ part, index, position }: Args): void {
 		if (!part) return;
+		if (position) {
+			const anchor = new Instance("Part");
+			anchor.Anchored = true;
+			anchor.CanCollide = false;
+			anchor.CanQuery = false;
+			anchor.CanTouch = false;
+			anchor.Transparency = 1;
+			anchor.Size = Vector3.one;
+			anchor.Position = position;
+			anchor.Parent = game.GetService("Workspace");
+			part = anchor;
+			Debris.AddItem(anchor, 15);
+		}
 
 		const soundIndex = index ?? math.random(0, this.soundsFolder.size() - 1);
 		const sound = this.soundsFolder[soundIndex].Clone() as Sound;
@@ -32,13 +46,11 @@ export class ExplosionEffect extends EffectBase<Args> {
 
 	private playVisualEffect(part: BasePart): void {
 		ReplicatedStorage.Assets.Effects.Explosion.GetChildren().forEach((effect) => {
-			task.spawn(() => {
-				const instance = effect.Clone() as ParticleEmitter;
-				instance.Parent = part;
-				instance.Enabled = true;
-				task.wait(0.1);
-				instance.Enabled = false;
-			});
+			const instance = effect.Clone() as ParticleEmitter;
+			instance.Enabled = false;
+			instance.Parent = part;
+			instance.Emit(math.max(1, math.floor(instance.Rate * 0.1)));
+			Debris.AddItem(instance, instance.Lifetime.Max + 0.1);
 		});
 	}
 }

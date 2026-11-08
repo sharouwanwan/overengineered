@@ -4,6 +4,7 @@ import { A2SRemoteEvent, S2CRemoteEvent } from "engine/shared/event/PERemoteEven
 import { t } from "engine/shared/t";
 import { InstanceBlockLogic } from "shared/blockLogic/BlockLogic";
 import { BlockSynchronizer } from "shared/blockLogic/BlockSynchronizer";
+import { BACK_MOUNT_EQUIP_DISTANCE, canEquipBackMount } from "shared/blocks/BackMountRange";
 import { BlockCreation } from "shared/blocks/BlockCreation";
 import type { BlockLogicFullBothDefinitions, InstanceBlockLogicArgs } from "shared/blockLogic/BlockLogic";
 import type { BlockBuilder } from "shared/blocks/Block";
@@ -70,7 +71,7 @@ type BackMountModel = BlockModel & {
 };
 
 // declaring constants here
-const MAX_PROMPT_VISIBILITY_DISTANCE = 5;
+const MAX_PROMPT_VISIBILITY_DISTANCE = BACK_MOUNT_EQUIP_DISTANCE;
 const MAX_PROMPT_VISIBILITY_DISTANCE_EQUIPPED = 15;
 
 const owners = new Map<BackMountModel, Player | undefined>();
@@ -78,6 +79,7 @@ const updateWeld = (caller: Player, owner: Player, block: BackMountModel, connec
 	const weldOwner = owners.get(block);
 
 	if (weldOwner === undefined) {
+		if (!canEquipBackMount(caller, block.mainPart)) return;
 		Logic.events.weldMountUpdate.send({
 			block,
 			weldedState: true,
@@ -126,7 +128,10 @@ const ownerSideInit = ({ block, key, owner, connectToRootPart }: proximityInfere
 	// some checks so the prompt disappears when player wearing
 	handler.subscribe(RunService.Heartbeat, () => {
 		const weldOwner = owners.get(block);
-		if (weldOwner !== player) return;
+		if (weldOwner !== player) {
+			pp.MaxActivationDistance = MAX_PROMPT_VISIBILITY_DISTANCE;
+			return;
+		}
 
 		const camera = Workspace.CurrentCamera;
 		if (!camera) return;
@@ -174,7 +179,7 @@ const otherClientSideInit = (
 		// these two checks are placed here ON PURPOSE
 		// allows the owner of the block to unequip the block off other players
 		if (weldOwner === undefined) {
-			pp.MaxActivationDistance = MAX_PROMPT_VISIBILITY_DISTANCE_EQUIPPED;
+			pp.MaxActivationDistance = MAX_PROMPT_VISIBILITY_DISTANCE;
 			return;
 		}
 

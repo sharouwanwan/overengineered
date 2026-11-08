@@ -2,6 +2,7 @@ import { GamepadService, GuiService, Players, ReplicatedStorage, RunService } fr
 import { MarkerWireVisualizer } from "client/gui/MarkerWireVisualizer";
 import { LogControl } from "client/gui/static/LogControl";
 import { ToolBase } from "client/tools/ToolBase";
+import { wireMarkerOffset } from "client/tools/WireMarkerLayout";
 import { Control } from "engine/client/gui/Control";
 import { Interface } from "engine/client/gui/Interface";
 import { InputController } from "engine/client/InputController";
@@ -23,22 +24,6 @@ import type { SharedPlot } from "shared/building/SharedPlot";
 
 namespace Markers {
 	export abstract class Marker extends MarkerWireVisualizer.Marker {
-		private static getPartMarkerPositions(originalOrigin: BasePart): Vector3[] {
-			const sizeX = originalOrigin.Size.X / 2;
-			const sizeY = originalOrigin.Size.Y / 2;
-			const sizeZ = originalOrigin.Size.Z / 2;
-			const offset = 0.25;
-
-			return [
-				new Vector3(-sizeX + offset, 0, 0),
-				new Vector3(sizeX - offset, 0, 0),
-				new Vector3(0, 0, -sizeZ + offset),
-				new Vector3(0, 0, sizeZ - offset),
-				new Vector3(0, -sizeY + offset, 0),
-				new Vector3(0, sizeY - offset, 0),
-				new Vector3(0, 0, 0),
-			];
-		}
 		static createInstance2(
 			origin: BasePart,
 			offset: Vector3 | number | "center",
@@ -46,7 +31,7 @@ namespace Markers {
 			originalOrigin: BasePart,
 		): MarkerWireVisualizer.MarkerDefinition {
 			if (typeIs(offset, "number")) {
-				offset = this.getPartMarkerPositions(originalOrigin)[offset];
+				offset = wireMarkerOffset(originalOrigin.Size, offset);
 			}
 
 			return this.createInstance(origin, offset, scale, ReplicatedStorage.Assets.Wires.WireMarker);

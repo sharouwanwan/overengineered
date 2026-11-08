@@ -100,8 +100,8 @@ export class PlayerDataStorage {
 
 		this._data.set({
 			...this.data.get(),
-			settings: {
-				...this.data.get().settings,
+			data: {
+				...this.data.get().data,
 				[key]: value,
 			},
 		});
@@ -109,21 +109,17 @@ export class PlayerDataStorage {
 
 	sendPlayerSlot(req: PlayerSaveSlotRequest) {
 		$log("Setting slot " + req.index + " to " + HttpService.JSONEncode(req));
-		this.loadedSlot.set(req.index);
-
-		let d = this.data.get();
-		if (d) {
-			this._data.set({
-				...d,
-				slots: SlotsMeta.withSlot(d.slots, req.index, { ...req, saveTime: DateTime.now().UnixTimestampMillis }),
-			});
-		}
-
 		const response = this.slotRemotes.save.send(req);
 		if (!response.success) {
 			$err(response.message);
 			return response;
 		}
+		this.loadedSlot.set(req.index);
+		let d = this.data.get();
+		this._data.set({
+			...d,
+			slots: SlotsMeta.withSlot(d.slots, req.index, { ...req, saveTime: DateTime.now().UnixTimestampMillis }),
+		});
 
 		d = this.data.get();
 		if (d) {
@@ -140,15 +136,15 @@ export class PlayerDataStorage {
 	deletePlayerSlot(req: PlayerDeleteSlotRequest) {
 		$log("Deleting slot " + req.index);
 
-		const copy = { ...this.slots.get() };
-		delete copy[req.index];
-		this.slots.set(copy);
-
 		const response = this.slotRemotes.delete.send(req);
 		if (!response.success) {
 			$err(response.message);
 			return response;
 		}
+
+		const copy = { ...this.slots.get() };
+		delete copy[req.index];
+		this.slots.set(copy);
 
 		return response;
 	}
