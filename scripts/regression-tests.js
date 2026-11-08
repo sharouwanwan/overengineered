@@ -393,6 +393,7 @@ let tntTime = 0,
 	tntConfirmed = false;
 const tntEvents = new Map(),
 	tntRequests = [];
+const fuseModule=load("src/shared/blockLogic/TNTFuse.ts",{},{math:{max:Math.max}});
 const contactSignal = {},
 	heartbeatSignal = {},
 	confirmationSignal = {};
@@ -400,14 +401,15 @@ class TestLogic {
 	constructor(def, block) {
 		this.instance = block.instance;
 		this.definition = def;
+		this.output={armed:{set(){}},triggered:{set(){}},remaining:{set(){}}};
 		this.enabled = true;
 		this.disableCallbacks = [];
 		this.event = { subscribe: (signal, fn) => tntEvents.set(signal, fn) };
 	}
 	initializeInputCache(key) {
-		return { get: () => ({ radius: 12, pressure: 2500, flammable: true, impact: true })[key] };
+		const get=()=>({radius:12,pressure:2500,flammable:true,impact:true,armed:true,armingDelay:0,fuseTime:0,proximity:0})[key];return {get,tryGet:get};
 	}
-	on(fn) {
+	onAlwaysInputs(fn) {
 		this.inputChanged = fn;
 	}
 	onDisable(fn) {
@@ -438,17 +440,20 @@ const { TNTBlocks } = load(
 			Workspace: { GetServerTimeNow: () => tntTime },
 		},
 		"shared/blockLogic/BlockLogic": { InstanceBlockLogic: TestLogic },
+		"shared/blockLogic/TNTFuse":fuseModule,
+		"shared/building/BlockManager":{BlockManager:{}},
 		"shared/blocks/BlockCreation": { BlockCreation: { arrayFromObject: Object.values } },
 		"shared/RemoteEvents": { RemoteEvents: { Explode: { send: (request) => tntRequests.push(request) } } },
 	},
 	{
 		os: { clock: () => tntTime },
-		RaycastParams: class {},
+		RaycastParams: class {},OverlapParams:class {},
 		Enum: { RaycastFilterType: { Exclude: 0 } },
 		math: { max: Math.max, min: Math.min },
 	},
 );
 const tntLogic = new TNTBlocks[0].logic.ctor({ instance: { Part: explosivePart, Parent: {} } });
+tntEvents.get(heartbeatSignal)();
 tntEvents.get(contactSignal)({ CanCollide: true, AssemblyRootPart: {}, GetVelocityAtPosition() {} });
 assert.equal(tntRequests.length, 1); // stationary explosive hit by moving target
 assert.equal(tntLogic.enabled, true); // wait for authoritative confirmation
@@ -498,7 +503,7 @@ console.log('Radar hold/release/reset and player cone/sphere bounds passed.');
 const radarSource = ts.createSourceFile('radar.ts',fs.readFileSync('src/shared/blocks/blocks/RadarSectionBlock.ts','utf8'),ts.ScriptTarget.Latest,true);
 const radarPrinter = ts.createPrinter();
 const radarDeclarations=radarSource.statements.filter(s=>ts.isVariableStatement(s)&&s.declarationList.declarations.some(d=>['definition','definitionRadial','sectionDefinition'].includes(d.name.getText(radarSource))));
-const radarDefinitionContext={};
+const radarDefinitionContext={inferEnumLogicType:v=>v};
 vm.runInNewContext(ts.transpileModule(radarDeclarations.map(s=>radarPrinter.printNode(ts.EmitHint.Unspecified,s,radarSource)).join('\n')+'\nglobalThis.definitions=[definition,definitionRadial,sectionDefinition];',{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,radarDefinitionContext);
 for(const def of radarDefinitionContext.definitions){
  assert.deepEqual(Array.from(def.inputOrder).sort(),Object.keys(def.input).sort());
@@ -506,8 +511,8 @@ for(const def of radarDefinitionContext.definitions){
  assert.equal(def.input.holdLostTarget.types.bool.config,false);
 }
 assert.equal(radarDefinitionContext.definitions[0].input.maxDistance.types.number.clamp.max,2048);
-assert.equal(radarDefinitionContext.definitions[1].input.maxDistance.types.number.clamp.max,20480);
-assert.equal(radarDefinitionContext.definitions[2].input.maxDistance.types.number.clamp.max,40960);
+assert.equal(radarDefinitionContext.definitions[1].input.maxDistance.types.number.clamp.max,15000);
+assert.equal(radarDefinitionContext.definitions[2].input.maxDistance.types.number.clamp.max,15000);
 assert.equal(radarDefinitionContext.definitions[2].input.coneAngle.types.number.clamp.max,120);
 console.log('Radar input validation, full Section range and cone angle passed.');
 
@@ -530,7 +535,7 @@ buildChildren.push(buildB);buildFolder.ChildAdded.fire();
 assert.equal(radarBuildTargets({Parent:buildFolder}).length,2);assert.equal(buildEnumerations,2);
 buildChildren.shift();buildFolder.ChildRemoved.fire();
 assert.equal(radarBuildTargets({Parent:buildFolder})[0],buildB);
-console.log('40,960-stud finite cone and cached build-only candidate registry passed.');
+console.log('Finite-cone math (including legacy long ranges) and build-only candidate registry passed.');
 
 const searchContext={exports:{}};
 vm.runInNewContext(`
@@ -651,22 +656,46 @@ class RadialLogicStub {
 }
 const radialAst=ts.createSourceFile('radar.ts',fs.readFileSync('src/shared/blocks/blocks/RadarSectionBlock.ts','utf8'),ts.ScriptTarget.Latest,true);
 const radialNodes=radialAst.statements.filter(s=>(ts.isVariableStatement(s)&&s.declarationList.declarations.some(d=>['definition','definitionRadial'].includes(d.name.getText(radialAst))))||(ts.isClassDeclaration(s)&&s.name.text==='RadialRadarLogic'));
-const radialContext={InstanceBlockLogic:RadialLogicStub,Vector3:RadialVector,Instance:class {Clear(){} AddPath(){} Destroy(){}},math:{pi:Math.PI,cos:Math.cos,sin:Math.sin,huge:Infinity},os:{clock:()=>0},radialSync:{send(){}},radialContains,RadarTargetMemory:radarHelpers.RadarTargetMemory,scheduleRadar:fn=>{radialScan=fn;return {Disconnect(){}};},radarBuildTargets:()=>radialCandidates,RunService:{IsClient:()=>true,Heartbeat:{}},Players:{GetPlayers:()=>radialPlayers}};
+const radialContext={inferEnumLogicType:v=>v,InstanceBlockLogic:RadialLogicStub,Vector3:RadialVector,Instance:class {Clear(){} AddPath(){} Destroy(){}},math:{pi:Math.PI,cos:Math.cos,sin:Math.sin,huge:Infinity},os:{clock:()=>0},radialSync:{send(){}},radialFields:new Map(),radialContains,RadarTargetMemory:radarHelpers.RadarTargetMemory,scheduleRadar:fn=>{radialScan=fn;return {Disconnect(){}};},radarBuildTargets:()=>radialCandidates,RunService:{IsClient:()=>true,Heartbeat:{}},Players:{GetPlayers:()=>radialPlayers}};
 vm.runInNewContext(ts.transpileModule(radialNodes.map(s=>radarPrinter.printNode(ts.EmitHint.Unspecified,s,radialAst)).join('\n').replaceAll('.size()','.length')+'\nglobalThis.Radial=RadialRadarLogic;', {compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,radialContext);
 const radialFolder={Name:'Blocks'},radialOrigin=RadialVector.zero;
 const radialInstance={Parent:radialFolder,PrimaryPart:{Position:radialOrigin},RadarView:{Color:{}},GetPivot:()=>({Position:radialOrigin,PointToObjectSpace:p=>p.sub(radialOrigin)})};
 const radialLogic=new radialContext.Radial({instance:radialInstance});
-radialLogic.change({maxDistance:20480});
-const farRoot={Parent:{},Position:new RadialVector(10000,0,0),Size:new RadialVector(2,2,2)};
+radialLogic.change({maxDistance:15000});
+const farRoot={Parent:{},Position:new RadialVector(7000,0,0),Size:new RadialVector(2,2,2)};
 radialCandidates=[{Parent:radialFolder,PrimaryPart:farRoot}];
-radialScan();radialLogic.tick();assert.equal(radialOutput.X,10000);
-farRoot.Position=new RadialVector(11000,0,0);radialLogic.tick();assert.equal(radialOutput,RadialVector.zero);
-farRoot.Position=new RadialVector(10000,0,0);radialScan();radialLogic.change({relativePositioning:false,holdLostTarget:true});radialLogic.tick();
-farRoot.Position=new RadialVector(11000,0,0);radialLogic.tick();assert.equal(radialOutput.X,10000);
+radialScan();radialLogic.tick();assert.equal(radialOutput.X,7000);
+farRoot.Position=new RadialVector(8000,0,0);radialLogic.tick();assert.equal(radialOutput,RadialVector.zero);
+farRoot.Position=new RadialVector(7000,0,0);radialScan();radialLogic.change({relativePositioning:false,holdLostTarget:true});radialLogic.tick();
+farRoot.Position=new RadialVector(8000,0,0);radialLogic.tick();assert.equal(radialOutput.X,7000);
 radialLogic.disables.forEach(fn=>fn());assert.equal(radialOutput,RadialVector.zero);
 radialLogic.change({minimalDistance:5,detectSelf:false,detectPlayers:false});radialScan();radialLogic.tick();assert.equal(radialOutput,RadialVector.zero);
-radialCandidates=[];const playerRoot={Parent:{},IsA:()=>true,Position:new RadialVector(9000,0,0)};
+radialCandidates=[];const playerRoot={Parent:{},IsA:()=>true,Position:new RadialVector(6000,0,0)};
 radialPlayers=[{Character:{FindFirstChildOfClass:()=>({Health:100}),FindFirstChild:()=>playerRoot}}];
-radialLogic.change({minimalDistance:5,detectSelf:false,detectPlayers:true});radialScan();radialLogic.tick();assert.equal(radialOutput.X,9000);
+radialLogic.change({minimalDistance:5,detectSelf:false,detectPlayers:true});radialScan();radialLogic.tick();assert.equal(radialOutput.X,6000);
 assert.equal(radialInstance.RadarView.Size.X,0.1);
 console.log('Actual radial logic detects far builds/players, respects radius/self filter, holds lost targets and resets on disable.');
+
+radialLogic.change({relativePositioning:false,holdLostTarget:false});radialPlayers=[];
+radialCandidates=[{Parent:{Name:'Blocks'},PrimaryPart:{Parent:{},Position:new RadialVector(300,0,0),Size:new RadialVector(2,2,2)}},{Parent:{Name:'Blocks'},PrimaryPart:{Parent:{},Position:new RadialVector(450,0,0),Size:new RadialVector(2,2,2)}}];
+radialLogic.change({maxDistance:1000});radialScan();radialLogic.tick();assert.equal(radialOutput.X,300);
+radialLogic.change({maxDistance:660});radialLogic.tick();assert.equal(radialOutput.X,300);
+radialLogic.change({maxDistance:1000});radialLogic.change({selection:'farthest'});radialScan();radialLogic.tick();assert.equal(radialOutput.X,450);
+const {NumericalFilter}=load('src/shared/blockLogic/NumericalFilter.ts',{}, {math:{abs:Math.abs,huge:Infinity,exp:Math.exp}});
+const f=new NumericalFilter();assert.equal(f.step(5,1,.1,false).low,5);assert.equal(f.step(5,1,.1,false).high,0);const filtered=f.step(10,1,.1,false);assert.ok(filtered.low>5&&filtered.low<10);assert.equal(filtered.low+filtered.high,10);assert.equal(f.step(10,1,.1,true).high,0);
+console.log('Radar range feedback, farthest selection and numerical filter checks passed.');
+
+require("./pvp-regression-tests.js");
+
+// Any uses discovery order, while Nearest and Farthest explicitly rank contacts.
+radialCandidates.reverse();radialLogic.change({selection:'any'});radialScan();radialLogic.tick();assert.equal(radialOutput.X,450);
+radialLogic.change({selection:'nearest'});radialScan();radialLogic.tick();assert.equal(radialOutput.X,300);
+const sectionNodes=radialAst.statements.filter(s=>(ts.isVariableStatement(s)&&s.declarationList.declarations.some(d=>['definition','sectionDefinition'].includes(d.name.getText(radialAst))))||(ts.isClassDeclaration(s)&&s.name.text==='RadarSectionLogic'));
+const sectionContext={...radialContext,sectionSync:{send(){}},sectionFields:new Map(),sectionFrame:()=>({Position:RadialVector.zero,PointToObjectSpace:p=>p}),coneContainsSphere,math:{...radialContext.math,tan:Math.tan,rad:n=>n*Math.PI/180,sqrt:Math.sqrt}};
+vm.runInNewContext(ts.transpileModule(sectionNodes.map(s=>radarPrinter.printNode(ts.EmitHint.Unspecified,s,radialAst)).join('\n').replaceAll('.size()','.length')+'\nglobalThis.Section=RadarSectionLogic;', {compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,sectionContext);
+const sectionLogic=new sectionContext.Section({instance:radialInstance});
+radialCandidates=[{Parent:radialFolder,PrimaryPart:{Parent:{},Position:new RadialVector(0,300,0),Size:new RadialVector(2,2,2)}}];
+sectionLogic.change({maxDistance:1000,coneAngle:30,detectionSize:1});radialScan();sectionLogic.tick();assert.equal(radialOutput.Y,300);
+for(let i=0;i<20;i++){sectionLogic.change({maxDistance:radialOutput.Magnitude+30,coneAngle:30,detectionSize:1});sectionLogic.tick();assert.equal(radialOutput.Y,300);}
+sectionLogic.change({maxDistance:200,coneAngle:30,detectionSize:1});sectionLogic.tick();assert.equal(radialOutput,RadialVector.zero);
+console.log('Any/Nearest/Farthest ordering and actual Section range-feedback loop passed.');
