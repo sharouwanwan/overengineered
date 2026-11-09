@@ -9,6 +9,7 @@ import type { GameHostBuilder } from "engine/shared/GameHostBuilder";
 
 export type ExplodeArgs = {
 	readonly position?: Vector3;
+	readonly impactTarget?: BasePart;
 	readonly time?: number;
 	readonly part: BasePart;
 	readonly radius: number;

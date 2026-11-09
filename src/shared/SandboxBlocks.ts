@@ -12,6 +12,7 @@ import { ChatSensorBlock } from "shared/blocks/blocks/ChatSensorBlock";
 import { ControllerBlock } from "shared/blocks/blocks/ControllerBlock";
 import { CounterBlock } from "shared/blocks/blocks/CounterBlock";
 import { DelayBlock } from "shared/blocks/blocks/DelayBlock";
+import { DeltaValueBlock } from "shared/blocks/blocks/DeltaValueBlock";
 import { DisconnectBlock } from "shared/blocks/blocks/DisconnectBlock";
 import { FallbackBlock } from "shared/blocks/blocks/FallbackBlock";
 import { FireSensorBlock } from "shared/blocks/blocks/FireSensorBlock";
@@ -141,6 +142,7 @@ export const CreateSandboxBlocks = (di: DIContainer): BlockList => {
 
 	const blocksArr: BlockBuilder[] = [
 		NumericalFilterBlock,
+		DeltaValueBlock,
 		...MatrixBlocks,
 		...BuildingBlocks,
 		...MechanicalBlocks,

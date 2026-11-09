@@ -23,6 +23,7 @@ const definition = {
 		},
 		defaultValue: {
 			displayName: "Default value",
+			connectorHidden: true,
 			types: BlockConfigDefinitions.any,
 			group: "1",
 		},

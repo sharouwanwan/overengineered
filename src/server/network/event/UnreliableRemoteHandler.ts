@@ -5,6 +5,7 @@ import { CombatDamage } from "server/network/CombatDamage";
 import { CombatHistory } from "server/network/CombatHistory";
 import { attachedBlastParts, tntBlastDistance } from "server/network/TNTBlast";
 import { ServerPartUtils } from "server/plots/ServerPartUtils";
+import { sweptImpact } from "shared/blockLogic/SweptImpact";
 import { BlockManager } from "shared/building/BlockManager";
 import { RemoteEvents } from "shared/RemoteEvents";
 import { CustomRemotes } from "shared/Remotes";
@@ -133,7 +134,7 @@ export class UnreliableRemoteController extends HostedService {
 		// Each source can detonate once during its lifetime.
 		const explode = (
 			player: Player | undefined,
-			{ part, isFlammable, pressure, radius, position, time }: ExplodeArgs,
+			{ part, isFlammable, pressure, radius, position, time, impactTarget }: ExplodeArgs,
 		) => {
 			if (!ServerBlockLogic.staticIsValidBlock(part, player, playModeController)) {
 				return;
@@ -162,7 +163,7 @@ export class UnreliableRemoteController extends HostedService {
 				if (!typeIs(position, "Vector3") || !typeIs(time, "number")) return;
 				const age = Workspace.GetServerTimeNow() - time;
 				if (age < -0.1 || age > 0.5) return;
-				const tolerance = math.min(64, 4 + part.AssemblyLinearVelocity.Magnitude * (math.max(age, 0) + 0.1));
+				const tolerance = math.min(512, 4 + part.AssemblyLinearVelocity.Magnitude * (math.max(age, 0) + 0.15));
 				const model = BlockManager.tryGetBlockModelByPart(part);
 				const collider = model?.PrimaryPart;
 				const pose = collider ? history.at(time)?.get(collider) : undefined;
@@ -184,6 +185,36 @@ export class UnreliableRemoteController extends HostedService {
 			const attachedCenter = part.Position;
 			const attached = new Set<BasePart>();
 			const hitSet = new Set(Workspace.GetPartBoundsInRadius(center, radius));
+			let directHit: BasePart | undefined;
+			if (
+				impactTarget &&
+				typeIs(impactTarget, "Instance") &&
+				impactTarget.IsA("BasePart") &&
+				BlockManager.isActiveBlockPart(impactTarget) &&
+				time !== undefined
+			) {
+				const past = history.at(time - 0.1);
+				const sourcePose = source.PrimaryPart && past?.get(source.PrimaryPart);
+				const targetModel = BlockManager.tryGetBlockModelByPart(impactTarget);
+				const targetPose = targetModel?.PrimaryPart && past?.get(targetModel.PrimaryPart);
+				if (
+					sourcePose &&
+					targetPose &&
+					targetModel !== source &&
+					impactTarget.AssemblyRootPart !== part.AssemblyRootPart
+				) {
+					const from = targetPose.frame.PointToObjectSpace(sourcePose.frame.Position);
+					const to = impactTarget.CFrame.PointToObjectSpace(part.Position);
+					const margin = math.min(part.Size.X, part.Size.Y, part.Size.Z) / 2;
+					if (
+						sweptImpact(from, to, impactTarget.Size.mul(0.5).add(new Vector3(margin, margin, margin))) !==
+						undefined
+					) {
+						directHit = impactTarget;
+						hitSet.add(impactTarget);
+					}
+				}
+			}
 			// The remote can arrive ahead of physics replication. Attached parts and the TNT
 			// still agree in server space, even when the aircraft has already flown past the blast.
 			for (const candidate of attachedBlastParts(
@@ -213,9 +244,10 @@ export class UnreliableRemoteController extends HostedService {
 			}
 			const hitParts = [...hitSet].filter(
 				(hit) =>
-					hit.CollisionGroup !== "ColBoxExclusive" &&
-					hit.CollisionGroup !== "RadarDetects" &&
-					hit.CollisionGroup !== "BlockCollider",
+					hit === directHit ||
+					(hit.CollisionGroup !== "ColBoxExclusive" &&
+						hit.CollisionGroup !== "RadarDetects" &&
+						hit.CollisionGroup !== "BlockCollider"),
 			);
 
 			if (isFlammable) {
@@ -238,7 +270,7 @@ export class UnreliableRemoteController extends HostedService {
 				const model = BlockManager.tryGetBlockModelByPart(hit) ?? hit.FindFirstAncestorOfClass("Model");
 				if (!model || model === source) return;
 				const localCenter = attached.has(hit) ? attachedCenter : center;
-				let distance = tntBlastDistance(hit, localCenter);
+				let distance = hit === directHit ? 0 : tntBlastDistance(hit, localCenter);
 				const pose =
 					time !== undefined && model.PrimaryPart ? history.at(time)?.get(model.PrimaryPart) : undefined;
 				if (pose)
@@ -248,7 +280,8 @@ export class UnreliableRemoteController extends HostedService {
 					);
 				const falloff = math.clamp(1 - distance / radius, 0, 1);
 				// An internal blast should not be shielded by another piece of its own aircraft.
-				const exposure = attached.has(hit) ? 1 : CombatDamage.exposure(center, hit, source);
+				const exposure =
+					attached.has(hit) || hit === directHit ? 1 : CombatDamage.exposure(center, hit, source);
 				const amount = 180 * falloff * (pressure / 2500) * exposure;
 				if (amount > (damage.get(model)?.amount ?? 0)) damage.set(model, { part: hit, amount });
 			});

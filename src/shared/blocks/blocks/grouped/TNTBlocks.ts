@@ -1,5 +1,7 @@
 import { RunService, Workspace } from "@rbxts/services";
 import { InstanceBlockLogic as InstanceBlockLogic } from "shared/blockLogic/BlockLogic";
+import { radarBuildTargets } from "shared/blockLogic/SectionRadarTargets";
+import { sweptImpact } from "shared/blockLogic/SweptImpact";
 import { BlockCreation } from "shared/blocks/BlockCreation";
 import { RemoteEvents } from "shared/RemoteEvents";
 import type { BlockLogicFullBothDefinitions, InstanceBlockLogicArgs } from "shared/blockLogic/BlockLogic";
@@ -94,11 +96,12 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 		this.onDisable(() => {
 			resend = undefined;
 		});
-		const explodeTNT = (position = mainPart.Position) => {
+		const explodeTNT = (position = mainPart.Position, impactTarget?: BasePart) => {
 			if (mainPart.GetAttribute("ExplosionDetonated") === true || os.clock() < pendingUntil) return;
 			pendingUntil = os.clock() + 0.5;
 			const request = {
 				part: mainPart,
+				impactTarget,
 				position,
 				time: Workspace.GetServerTimeNow(),
 				radius: radius.get(),
@@ -117,7 +120,9 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 		let previousPosition = mainPart.Position;
 		const sweep = new RaycastParams();
 		sweep.FilterType = Enum.RaycastFilterType.Exclude;
-		sweep.FilterDescendantsInstances = [this.instance.Parent ?? this.instance];
+		let nextFilter = 0;
+		let filterRoot: BasePart | undefined;
+		const previousTargets = new Map<BasePart, CFrame>();
 		sweep.RespectCanCollide = true;
 		this.event.subscribe(RunService.Heartbeat, () => {
 			if (resend && os.clock() >= retryAt) {
@@ -133,6 +138,11 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 				travel.Magnitude > 0.01 &&
 				mainPart.AssemblyLinearVelocity.Magnitude > 10
 			) {
+				if (os.clock() >= nextFilter || filterRoot !== mainPart.AssemblyRootPart) {
+					filterRoot = mainPart.AssemblyRootPart;
+					sweep.FilterDescendantsInstances = [mainPart, ...mainPart.GetConnectedParts(true)];
+					nextFilter = os.clock() + 0.1;
+				}
 				const hit = Workspace.Spherecast(
 					previousPosition,
 					math.max(0.1, math.min(mainPart.Size.X, mainPart.Size.Y, mainPart.Size.Z) / 2),
@@ -140,6 +150,29 @@ class Logic extends InstanceBlockLogic<typeof definition, TNTBlock> {
 					sweep,
 				);
 				if (hit) explodeTNT(previousPosition.add(travel.Unit.mul(hit.Distance)));
+			}
+			// Relative sweeps catch crossing targets which moved through the missile path between frames.
+			if (impact.get() && mainPart.GetAttribute("ExplosionDetonated") !== true) {
+				const nextTargets = new Set<BasePart>();
+				for (const model of radarBuildTargets(this.instance)) {
+					const target = model.PrimaryPart;
+					if (!target || target.AssemblyRootPart === mainPart.AssemblyRootPart || target.Anchored) continue;
+					nextTargets.add(target);
+					const old = previousTargets.get(target);
+					previousTargets.set(target, target.CFrame);
+					if (!old) continue;
+					const start = old.PointToObjectSpace(previousPosition),
+						finish = target.CFrame.PointToObjectSpace(position);
+					if (finish.sub(start).Magnitude <= 0.01) continue;
+					const radius = math.min(mainPart.Size.X, mainPart.Size.Y, mainPart.Size.Z) / 2;
+					const fraction = sweptImpact(
+						start,
+						finish,
+						target.Size.mul(0.5).add(new Vector3(radius, radius, radius)),
+					);
+					if (fraction !== undefined) explodeTNT(previousPosition.add(travel.mul(fraction)), target);
+				}
+				for (const [target] of previousTargets) if (!nextTargets.has(target)) previousTargets.delete(target);
 			}
 			previousPosition = position;
 		});

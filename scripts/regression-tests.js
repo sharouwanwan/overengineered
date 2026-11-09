@@ -439,6 +439,8 @@ const { TNTBlocks } = load(
 			Workspace: { GetServerTimeNow: () => tntTime },
 		},
 		"shared/blockLogic/BlockLogic": { InstanceBlockLogic: TestLogic },
+        "shared/blockLogic/SectionRadarTargets": { radarBuildTargets: () => [] },
+        "shared/blockLogic/SweptImpact": { sweptImpact: () => undefined },
 		"shared/building/BlockManager":{BlockManager:{}},
 		"shared/blocks/BlockCreation": { BlockCreation: { arrayFromObject: Object.values } },
 		"shared/RemoteEvents": { RemoteEvents: { Explode: { send: (request) => tntRequests.push(request) } } },
@@ -726,3 +728,33 @@ assert.equal(blastMath.tntBlastDistance(blastPart(0,0,0,aircraftRoot),serverBlas
 assert.equal(blastMath.tntBlastDistance(blastPart(13,0,0,aircraftRoot),serverBlast),12);
 assert.ok(blastMath.tntBlastDistance(blastPart(12,12,0,aircraftRoot),serverBlast)>12);
 console.log('TNT moving-assembly compensation, foreign-assembly isolation and surface-distance boundaries passed.');
+
+const {sweptImpact}=load('src/shared/blockLogic/SweptImpact.ts',{}, {math:{abs:Math.abs,min:Math.min,max:Math.max}});
+assert.equal(sweptImpact(new RadialVector(-1000,0,0),new RadialVector(1000,0,0),new RadialVector(2,2,2)),0.499);
+assert.equal(sweptImpact(new RadialVector(-1000,3,0),new RadialVector(1000,3,0),new RadialVector(2,2,2)),undefined);
+const numericMatrix=load('src/shared/blockLogic/Matrix3.ts',{}, {Vector3:RadialVector}).Matrix3;
+class NumericStub {
+ constructor(){this.output={result:{set:(type,value)=>{this.result={type,value};}}};} onAlwaysInputs(fn){this.step=fn;} onDisable(){}
+}
+for(const name of ['NumericalFilterBlock','DeltaValueBlock']) {
+ const mod=load('src/shared/blocks/blocks/'+name+'.ts',{
+ 'shared/blockLogic/BlockLogic':{BlockLogic:NumericStub},
+ 'shared/blockLogic/BlockLogicTypes':{inferEnumLogicType:v=>v},
+ 'shared/blockLogic/Matrix3':{Matrix3:numericMatrix},
+ 'shared/blockLogic/NumericalFilter':{NumericalFilter},
+ 'shared/blocks/BlockCreation':{BlockCreation:{defaults:{},Model:{fAutoCreated(){}},Categories:{}}}
+ },{Vector3:RadialVector,typeIs:(v,t)=>t==='number'?typeof v==='number':v instanceof RadialVector,math:{abs:Math.abs,huge:Infinity}});
+ const logic=new mod[name].logic.ctor({});
+ const values={value:0,valueType:'number',reset:false,tickBased:true,timeConstant:2,mode:'low'};
+ logic.step(values,{dt:.01}); logic.step({...values,value:10},{dt:.2});
+ assert.ok(Math.abs(logic.result.value-(name==='DeltaValueBlock'?10:10*(1-Math.exp(-.5))))<1e-9);
+ logic.step({...values,value:10},{dt:.01}); if(name==='DeltaValueBlock')assert.equal(logic.result.value,0);
+ const m={...numericMatrix.zero,m11:2,m22:4};
+ logic.step({...values,value:m,valueType:'matrix3'},{dt:.1});
+ assert.equal(logic.result.type,'matrix3');assert.equal(logic.result.value.m11,name==='DeltaValueBlock'?0:2);
+ logic.step({...values,value:{...m,m11:8},valueType:'matrix3'},{dt:.1});
+ assert.ok(logic.result.value.m11>0);
+ logic.step({...values,value:m,valueType:'matrix3',reset:true},{dt:.1});
+ assert.equal(logic.result.value.m11,name==='DeltaValueBlock'?0:2);
+}
+console.log('Relative high-speed sweeps, matrix filter/delta, tick timing and reset passed.');
